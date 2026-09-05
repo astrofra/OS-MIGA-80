@@ -11,6 +11,7 @@ TARGET_AS := $(MIGA80_TOOLCHAIN_PREFIX)/bin/m68k-amigaos-as
 TARGET_OBJCOPY := $(MIGA80_TOOLCHAIN_PREFIX)/bin/m68k-amigaos-objcopy
 TARGET_RUNTIME := -mcrt=nix20
 HOST_CC ?= cc
+PYTHON ?= python3
 
 PROJECT_CPPFLAGS := -Isrc
 
@@ -339,6 +340,36 @@ EXCLUSIVE_GRAPHICS_TEST_ADF := \
 	$(DISTRIBUTION_DIR)/miga80-exclusive-graphics-test.adf
 EXCLUSIVE_GRAPHICS_TEST_ADF_MANIFEST := \
 	$(DISTRIBUTION_DIR)/miga80-exclusive-graphics-test.manifest.txt
+FONT4X8_SOURCE_IMAGE := works/ID/font-4x8.png
+FONT4X8_SOURCE_ORDER := works/ID/font-4x8.txt
+FONT4X8_GENERATOR := scripts/generate-font-4x8.py
+FONT4X8_GENERATED_DIR := build/generated
+FONT4X8_GENERATED_HEADER := $(FONT4X8_GENERATED_DIR)/font4x8_data.h
+FONT4X8_GENERATED_BINARY := $(FONT4X8_GENERATED_DIR)/FONT4X8.BIN
+SOURCE_VIEW_SOURCE := src/ui/source_view.c
+SOURCE_VIEW_HEADER := src/ui/source_view.h
+SOURCE_VIEW_PALETTE_SOURCE := src/ui/palette.c
+SOURCE_VIEW_PALETTE_HEADER := src/ui/palette.h
+SOURCE_VIEW_FIXTURE := assets/demo/default.lua
+SOURCE_VIEW_HOST_BUILD_DIR := $(HOST_BUILD_DIR)/source-view
+SOURCE_VIEW_HOST_TEST_SOURCE := tests/host/source-view/main.c
+SOURCE_VIEW_HOST_TEST_PROGRAM := $(SOURCE_VIEW_HOST_BUILD_DIR)/test
+SOURCE_VIEW_HOST_EXPECTED := tests/host/source-view/expected.txt
+SOURCE_VIEW_HOST_REPORT := $(REPORT_DIR)/source-view-host.txt
+SOURCE_VIEW_HOST_PREVIEW := $(REPORT_DIR)/source-view.ppm
+MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
+MIGA80_DEMO_SOURCE := src/demo/main.c
+MIGA80_DEMO_PROGRAM := $(MIGA80_DEMO_BUILD_DIR)/miga80
+MIGA80_DEMO_MAP := $(MIGA80_DEMO_BUILD_DIR)/miga80.map
+MIGA80_DEMO_SIZE_REPORT := $(REPORT_DIR)/source-view-amiga-size.txt
+MIGA80_DEMO_STARTUP := assets/demo/Startup-Sequence
+MIGA80_DEMO_README := assets/demo/README.TXT
+MIGA80_DEMO_ADF_BUILDER := scripts/build-miga80-demo-adf.sh
+MIGA80_DEMO_ADF_TESTER := scripts/test-miga80-demo-adf-fs-uae.sh
+MIGA80_DEMO_ADF_EXPECTED := tests/smoke/source-view-adf/expected.txt
+MIGA80_DEMO_ADF := $(DISTRIBUTION_DIR)/miga80-source-view.adf
+MIGA80_DEMO_ADF_MANIFEST := \
+	$(DISTRIBUTION_DIR)/miga80-source-view.manifest.txt
 
 TARGET_CFLAGS := \
 	-std=c99 \
@@ -387,6 +418,8 @@ C2P_BENCHMARK_CFLAGS = $(filter-out -Os,$(TARGET_CFLAGS)) -O2
 	exclusive-graphics-benchmark-fs-uae \
 	exclusive-graphics-benchmark-fs-uae-fast exclusive-graphics-test-adf \
 	exclusive-graphics-test-adf-inspect exclusive-graphics-test-adf-fs-uae \
+	source-view-test miga80-demo miga80-demo-inspect miga80-demo-adf \
+	miga80-demo-adf-inspect miga80-demo-adf-fs-uae \
 	runtime-compare \
 	check run clean
 
@@ -418,6 +451,74 @@ vamos-test: $(AMIGA_PROGRAM)
 
 run: stage
 	./scripts/run-fs-uae.sh a1200-pal-ks30-hd
+
+$(FONT4X8_GENERATED_HEADER): $(FONT4X8_SOURCE_IMAGE) \
+		$(FONT4X8_SOURCE_ORDER) $(FONT4X8_GENERATOR)
+	@mkdir -p $(FONT4X8_GENERATED_DIR)
+	$(PYTHON) $(FONT4X8_GENERATOR) $(FONT4X8_SOURCE_IMAGE) \
+		$(FONT4X8_SOURCE_ORDER) --header $@
+
+$(FONT4X8_GENERATED_BINARY): $(FONT4X8_SOURCE_IMAGE) \
+		$(FONT4X8_SOURCE_ORDER) $(FONT4X8_GENERATOR)
+	@mkdir -p $(FONT4X8_GENERATED_DIR)
+	$(PYTHON) $(FONT4X8_GENERATOR) $(FONT4X8_SOURCE_IMAGE) \
+		$(FONT4X8_SOURCE_ORDER) --binary $@
+
+$(SOURCE_VIEW_HOST_TEST_PROGRAM): $(SOURCE_VIEW_HOST_TEST_SOURCE) \
+		$(SOURCE_VIEW_SOURCE) $(SOURCE_VIEW_HEADER) \
+		$(SOURCE_VIEW_PALETTE_SOURCE) $(SOURCE_VIEW_PALETTE_HEADER) \
+		$(FONT4X8_GENERATED_HEADER) Makefile
+	@mkdir -p $(SOURCE_VIEW_HOST_BUILD_DIR)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) -I$(FONT4X8_GENERATED_DIR) \
+		$(HOST_CFLAGS) $(SOURCE_VIEW_HOST_TEST_SOURCE) \
+		$(SOURCE_VIEW_SOURCE) $(SOURCE_VIEW_PALETTE_SOURCE) -o $@
+
+source-view-test: $(SOURCE_VIEW_HOST_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
+		$(SOURCE_VIEW_HOST_EXPECTED)
+	@mkdir -p $(REPORT_DIR)
+	$(SOURCE_VIEW_HOST_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
+		$(SOURCE_VIEW_HOST_PREVIEW) >$(SOURCE_VIEW_HOST_REPORT)
+	diff -u $(SOURCE_VIEW_HOST_EXPECTED) $(SOURCE_VIEW_HOST_REPORT)
+
+miga80-demo: $(MIGA80_DEMO_PROGRAM)
+
+$(MIGA80_DEMO_PROGRAM): $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
+		$(SOURCE_VIEW_HEADER) $(SOURCE_VIEW_PALETTE_SOURCE) \
+		$(SOURCE_VIEW_PALETTE_HEADER) $(FONT4X8_GENERATED_HEADER) \
+		$(C2P_REFERENCE_SOURCE) $(C2P_REFERENCE_HEADER) Makefile
+	@mkdir -p $(MIGA80_DEMO_BUILD_DIR)
+	$(TARGET_CC) $(PROJECT_CPPFLAGS) -I$(FONT4X8_GENERATED_DIR) \
+		$(TARGET_CFLAGS) $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
+		$(SOURCE_VIEW_PALETTE_SOURCE) $(C2P_REFERENCE_SOURCE) \
+		-Wl,-Map,$(MIGA80_DEMO_MAP) -o $@ $(TARGET_RUNTIME)
+
+miga80-demo-inspect: $(MIGA80_DEMO_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(TARGET_SIZE) $(MIGA80_DEMO_PROGRAM) | tee $(MIGA80_DEMO_SIZE_REPORT)
+	$(TARGET_NM) --print-size --size-sort $(MIGA80_DEMO_PROGRAM) \
+		>$(REPORT_DIR)/source-view-amiga-symbols.txt
+	$(TARGET_OBJDUMP) -dr $(MIGA80_DEMO_PROGRAM) \
+		>$(REPORT_DIR)/source-view-amiga-disassembly.txt
+
+miga80-demo-adf: $(MIGA80_DEMO_ADF)
+
+$(MIGA80_DEMO_ADF): $(MIGA80_DEMO_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
+		$(FONT4X8_GENERATED_BINARY) $(MIGA80_DEMO_STARTUP) \
+		$(MIGA80_DEMO_README) LICENSE $(MIGA80_DEMO_ADF_BUILDER)
+	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) \
+		$(SOURCE_VIEW_FIXTURE) $(FONT4X8_GENERATED_BINARY) \
+		$(MIGA80_DEMO_STARTUP) $(MIGA80_DEMO_README) LICENSE $@
+
+miga80-demo-adf-inspect: $(MIGA80_DEMO_ADF)
+	xdfscan $(MIGA80_DEMO_ADF)
+	xdftool $(MIGA80_DEMO_ADF) list
+	@printf 'Manifest: %s\n' $(MIGA80_DEMO_ADF_MANIFEST)
+
+miga80-demo-adf-fs-uae: $(MIGA80_DEMO_ADF) \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF_EXPECTED)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=45 \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
+		$(MIGA80_DEMO_ADF_EXPECTED)
 
 fs-uae-smoke: stage
 	./scripts/test-fs-uae-runtime.sh
@@ -1016,7 +1117,7 @@ check: miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
-	chipram-benchmark exclusive-graphics-benchmark inspect vamos-test \
+	source-view-test chipram-benchmark exclusive-graphics-benchmark inspect vamos-test \
 	aga-screen-smoke
 
 clean:
@@ -1024,5 +1125,5 @@ clean:
 		$(REPORT_DIR) \
 		$(SMOKE_BUILD_DIR) $(BENCHMARK_BUILD_DIR) $(DISTRIBUTION_DIR) \
 		build/fs-uae-smoke build/fs-uae-physical-adf \
-		build/runtime-comparison
+		build/fs-uae-demo-adf build/generated build/runtime-comparison
 	rm -f $(STAGED_PROGRAM) $(STAGING_DIR)/fs-uae-smoke.out

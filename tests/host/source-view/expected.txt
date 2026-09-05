@@ -1,0 +1,8 @@
+font_cell=4x8
+source_bytes=643
+source_lines=30
+maximum_columns=44
+source_checksum=6600f4de
+framebuffer_checksum=f05779cc
+rejections=pass
+result=pass

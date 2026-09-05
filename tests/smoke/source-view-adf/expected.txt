@@ -1,0 +1,13 @@
+miga80_source_view_report=1
+target=pal-a1200-68020-aga
+screen=256x256x8-dual-playfield
+font=4x8
+source_bytes=643
+source_lines=30
+maximum_columns=44
+source_checksum=6600f4de
+framebuffer_checksum=f05779cc
+palette=workbench-sunset
+palette_roundtrip=pass
+source_view=pass
+result=pass

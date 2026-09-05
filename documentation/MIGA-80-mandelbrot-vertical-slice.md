@@ -1,6 +1,7 @@
 # MIGA-80 Mandelbrot Vertical Slice
 
-**Status:** Approved implementation plan; documentation-first checkpoint
+**Status:** Source-view checkpoint implemented and passing under FS-UAE;
+on-target compilation and execution remain in progress
 
 **Date:** 2026-09-05
 
@@ -148,20 +149,18 @@ one physical line without weakening the explicit-type rules.
 
 ## 7. Bitmap Font Asset Contract
 
-The initial font is an original freely licensed asset. Miniwi may be used as
-visual inspiration, but it is not imported or converted: Miniwi is GPLv3 while
-the MIGA-80 repository is MIT-licensed. A separately granted compatible
-license would be required before any Miniwi-derived glyph data could be
-embedded.
+The initial font is the original freely licensed project asset supplied as
+`works/ID/font-4x8.png`, with cell order in `works/ID/font-4x8.txt`. Miniwi was
+used only as visual inspiration and no Miniwi glyph data was imported or
+converted.
 
-The minimum font deliverable is:
-
-- a fixed 4 x 8 pixel cell, including inter-character spacing;
-- printable ASCII `0x20` through `0x7e`, including lowercase letters;
-- no pixel outside the declared cell;
-- a BDF source file when practical;
-- a PNG overview for visual review;
-- a clear MIT or CC0 license file.
+The source sheet is exactly 104 x 32 pixels: 26 columns by four rows of fixed
+4 x 8 cells. The first cell is the editor cursor rather than ASCII space.
+Later space entries are empty separator cells; the converter selects one as
+the canonical ASCII space. The sheet defines the punctuation, digits, Latin
+uppercase, and Latin lowercase glyphs needed by the bundled source. Double
+quote, apostrophe, and backtick are not yet drawn and deterministically use
+the question-mark fallback.
 
 The generated runtime representation is intentionally simple:
 
@@ -171,9 +170,11 @@ uint8_t glyph_rows[95][8];
 
 `glyph_rows[codepoint - 0x20][0]` is the top row. Bits 3 through 0 represent
 pixels from left to right; bits 7 through 4 must be zero. Unsupported input is
-rendered as `?`. The table occupies 760 bytes before any alignment. A build
-tool converts the source asset to this representation and rejects missing,
-duplicate, oversized, or out-of-range glyphs.
+rendered as `?`. The table occupies 760 bytes before any alignment. The
+standard-library-only `scripts/generate-font-4x8.py` converter validates PNG
+CRC and layout, reverses PNG scanline filters, checks glyph cells, and emits
+both the C header and a 780-byte `M8F4` binary asset. The cursor occupies its
+own eight-byte entry and is not mapped to a character.
 
 The first UI and bundled source are ASCII-only. Latin-1 coverage can be added
 later without changing the renderer.
@@ -396,36 +397,55 @@ error states for this slice.
 
 ## 13. Build and ADF Layout
 
-Proposed build targets are:
+Implemented build targets are:
 
 ```sh
-gmake mandelbrot-vertical-slice
+gmake source-view-test
+gmake miga80-demo-inspect
 gmake miga80-demo-adf
 gmake miga80-demo-adf-inspect
 gmake miga80-demo-adf-fs-uae
 ```
 
-The exact target names may be shortened when added to the Makefile. The image
-contains at least:
+The image contains:
 
 ```text
 S/Startup-Sequence
 MIGA80
-MIGA80/DEFAULT.LUA
-MIGA80/FONT4X8.BIN
+DATA/DEFAULT.LUA
+DATA/FONT4X8.BIN
 README.TXT
-LICENSES/
+LICENSE.TXT
 ```
 
 The font binary is generated from its checked-in source and license. The ADF
-manifest records raw size, free filesystem blocks, file listing, executable
-checksum, source checksum, font checksum, and build-tool versions. The payload
-must remain within the existing 800 KiB planning budget.
+manifest records raw size, filesystem listing, and executable, source, font,
+and complete-ADF checksums. The payload must remain within the existing
+800 KiB planning budget.
 
-The production startup waits in the source view for `F5`. An automated test
-mode may inject the same command or use a test-only `AUTORUN` argument, but it
-must traverse the same source-load, compile, encode, execute, and publish
-functions as the interactive path.
+The source-view checkpoint waits for `Esc` after drawing the source. `F5` is
+shown in the status row but is intentionally inactive until the callable
+compiler tranche lands. After drawing and AGA readback, the hosted program
+writes a bounded `BOOTED.TXT` report. The FS-UAE test boots a writable copy of
+the exact production ADF, waits for that report, verifies its checksums, and
+then stops the emulator while the source screen is still open.
+
+### 13.1 Implemented source-view checkpoint
+
+The 2026-09-05 Kickstart 3.0 FS-UAE run passes with:
+
+- a 9,436-byte Hunk executable with 6,568 text bytes, 304 data bytes, and
+  4,924 BSS bytes;
+- a 643-byte source file occupying exactly 30 rows with a 44-column maximum;
+- source FNV-1a checksum `6600f4de`;
+- canonical source-view framebuffer checksum `f05779cc`;
+- verified AGA dual-playfield palette bases, RGB round-trip, C2P output, and
+  bitmap pixel readback;
+- 39 occupied OFS blocks, reported as 19 KiB including filesystem overhead.
+
+The raw DD ADF remains exactly 901,120 bytes regardless of used blocks. Its
+SHA-256 is recorded in the adjacent generated manifest and may change when
+timestamps or any packaged input change.
 
 ## 14. Validation Matrix
 
@@ -497,8 +517,9 @@ physical-hardware release gates.
 
 ## 16. Implementation Order
 
-1. **Visible shell:** reusable hosted screen, input states, font importer,
-   source raster, palette, default source file, and bootable ADF.
+1. **Completed 2026-09-05 -- visible shell:** reusable hosted screen, input
+   state, checked font importer, source raster, palette, default source file,
+   boot report, and bootable ADF.
 2. **Callable compiler:** `void`, semicolons, typed `pset`, call IR,
    call-aware liveness, runtime-context ABI extension, and Musashi mock.
 3. **Direct code:** shared instruction form, checked encoder, metadata,
@@ -521,4 +542,3 @@ run through the target trampoline.
 - [Hosted AGA Screen Smoke Test](./aga-screen-smoke.md)
 - [Four-Plane C2P Reference and Benchmark](./c2p4-benchmark.md)
 - [Three-Layer Graphics Reference Compositor](./graphics-reference-compositor.md)
-

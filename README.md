@@ -136,6 +136,21 @@ Run the hosted 256×256 AGA dual-playfield smoke test separately with:
 gmake aga-screen-smoke
 ```
 
+Build and boot-test the first visible MIGA-80 vertical slice with:
+
+```sh
+gmake source-view-test miga80-demo-adf-inspect
+gmake miga80-demo-adf-fs-uae
+```
+
+This produces `build/distribution/miga80-source-view.adf`. The standalone OFS
+disk launches MIGA-80, loads `DATA/DEFAULT.LUA`, and displays its complete
+30-line Mandelbrot source with the project 4×8 bitmap font. The exact ADF boot
+is checked under FS-UAE through a canonical framebuffer hash and AGA readback
+probes.
+Compilation and execution are the next vertical-slice tranches; see the
+[Mandelbrot vertical-slice plan](documentation/MIGA-80-mandelbrot-vertical-slice.md).
+
 The target is currently locked to the `libnix` Kickstart 2+ startup/runtime with
 `-mcrt=nix20`. Reproduce the `newlib`/`libnix`/`clib2` allocation and filesystem
 comparison with:
