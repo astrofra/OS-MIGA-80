@@ -1,4 +1,4 @@
-/* MIGA Lua native ABI 0.4: a=D0, b=D1, result=D0, D2 caller-saved. */
+/* MIGA Lua native ABI 0.6: a=D0, b=D1, result=D0, D2 caller-saved. */
 
         .text
         .globl  mul_add

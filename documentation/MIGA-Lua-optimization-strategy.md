@@ -1,7 +1,8 @@
 # MIGA Lua Optimization Strategy
 
-**Status:** exact-width integers, immutable strings/symbols, signed/unsigned
-division with controlled faults, normalized `break`/`continue` loops, cyclic
+**Status:** exact-width integers, signed Q16.16 fixed point including division
+and explicit `i32` conversions,
+immutable strings/symbols, signed/unsigned integer division with controlled faults, normalized `break`/`continue` loops, cyclic
 CFG liveness, branch/loop `phi`, parallel edge copies, `-O1`, spilling, and
 frame layout implemented
 
@@ -109,14 +110,45 @@ is observable. A proven nonzero constant divisor needs no guard and a dead such
 division may be removed. Replacing other constant divisors, including powers of
 two, remains future measured strength-reduction work.
 
+`fix` uses one signed Q16.16 data value. Constant folding multiplies unsigned
+magnitudes in C99 and explicitly applies the specified negative-infinity
+rounding, avoiding host signed-overflow and signed-shift dependencies. Native
+selection uses 68020 `MULS.L` for the exact 64-bit product, followed by
+`MOVE.W` and `SWAP` to extract bits 16 through 47. Addition, subtraction,
+negation, and signed comparisons reuse the ordinary 32-bit instructions.
+Fixed-point division folds the exact magnitude expression
+`(|a| * 65536) / |b|`, reapplies the sign for truncation toward zero, and
+keeps the low 32 bits. Native selection uses a 32-bit `DIVUL.L` remainder step
+followed by one non-overflowing 64/32-bit `DIVU.L`; this defines wrapping even
+when the mathematical quotient exceeds 32 bits. `/ 1.0` is removed and
+`/ -1.0` becomes wrapping negation.
+
+Explicit `fix(i32)` first biases the input by `0x8000` and performs one
+unsigned comparison against `0x10000`, accepting exactly -32768 through 32767.
+The successful native path restores the value and uses `SWAP` plus `CLR.W` to
+shift it by 16 without a helper. A dynamic checked conversion is a liveness
+root even if its result is overwritten; its cold failure path enters ABI fault
+2 with the source location. O1 omits the guard when the input is produced
+directly by `i32(fix)`, whose range is already proven. `i32(fix)` cannot
+overflow: it adds `0xffff` only for a negative raw value, then uses `SWAP` and
+`EXT.L`, so negative values truncate toward zero. Both forms fold at compile
+time.
+
 The allocator first tries all eight data registers, so ordinary leaf functions
 do not lose `D7` merely to reserve a scratch register. If that plan needs a
 spill, a second bounded pass allocates values in `D0-D6`, reserves `D7` as the
 spill scratch, and reuses four-byte spill slots after their last use. The
-backend emits an ABI 0.4 `A6` frame with `LINK`/`UNLK`, addresses slots at
+backend emits an ABI 0.6 `A6` frame with `LINK`/`UNLK`, addresses slots at
 negative `A6` offsets, consumes spilled operands directly as 68020 memory
 operands where possible, and preserves `D7` with the other used saved
 registers. Frame size is checked before any assembly is emitted.
+Only a function containing a live fixed-point multiplication takes a different
+bounded route: values are allocated in `D0-D5`, `D7` is the preserved high
+product register, and `D6` is retained as a low-product scratch only if that
+particular result spills. This keeps the fixed-point requirement out of every
+integer-only function. A live fixed-point division instead allocates values in
+`D0-D4`, preserves `D6` for the divisor magnitude and `D7` for the high
+dividend/remainder, and uses preserved `D5` only when its result spills.
 
 `-O0` gives every source local a physical negative `A6` slot after the
 parameter slots. `-O1` needs no local slot when value renaming and liveness keep
@@ -147,7 +179,7 @@ participate directly in a CFG condition. Statement-only `++`, `--`, `+=`,
 Immutable string literals are canonical pool pointers and symbols are interned
 IDs, so equality uses one 32-bit comparison and needs neither a helper call nor
 a byte loop. Pool addresses are materialized with PC-relative `LEA`. Live
-string parameters arrive in `A0/A1` under ABI 0.4 and are copied into the
+string parameters arrive in `A0/A1` under ABI 0.6 and are copied into the
 current uniform data-register allocator; using `A2-A4` for long-lived address
 values remains a future measured optimization.
 
@@ -190,8 +222,11 @@ The first optimization milestone is met. Across seven ordinary source corpora
 with six edge inputs each, a signed-division corpus with twelve successful
 executions and four controlled faults, an exact-width corpus with twelve
 successful executions and two controlled faults, an immutable-value corpus
-with four executions, and a six-input spill fixture, both optimization levels
-agree with the typed IR under Musashi. The current
+with four executions, a fixed-point corpus with eight executions, a
+fixed-division corpus with 16 successful executions and four controlled
+faults, an explicit-conversion corpus with twelve successful executions and
+four controlled faults, and a six-input spill fixture, both
+optimization levels agree with the typed IR under Musashi. The current
 regression measurements are shown as code bytes / executed instructions /
 maximum callee stack bytes:
 
@@ -207,23 +242,26 @@ maximum callee stack bytes:
 | signed `/` and `/=`, including controlled faults | 108 / 16-28 / 28 | 44 / 7-11 / 0 |
 | `i8`/`u8`/`i16`/`u16`, signed/unsigned division and wrapping | 472 / 43-110 / 44 | 220 / 15-34 / 20 |
 | immutable string/symbol pool, equality, and CFG joins | 196 / 46-47 / 28 | 136 / 23-24 / 16 |
+| signed Q16.16 multiplication, comparison, wrapping, and CFG join | 196 / 57-58 / 28 | 104 / 25-26 / 16 |
+| signed Q16.16 `/` and `/=`, wrapping quotient, controlled faults | 300 / 16-101 / 28 | 164 / 10-55 / 8-16 |
+| explicit `fix(i32)` / `i32(fix)`, including range faults | 208 / 15-50 / 28-32 | 112 / 11-26 / 16 |
 
 The register-pressure corpus forces simultaneous `D3/D4` allocation and
 verifies their ABI preservation. A separate deliberately pressure-heavy value
 IR fixture forces three reusable spill slots; its 96-byte image executes 33
 instructions with 36 callee stack bytes and agrees with the source-level oracle
-for six edge inputs. This brings the current Musashi compiler total to 124
-executions.
+for six edge inputs. The conversion corpus adds 12 returned values and four
+controlled faults after the fixed-division tranche, bringing the current
+Musashi compiler total to 168 executions.
 
-The `-Os` 68020/libnix compiler currently has a 62,632-byte linked
-text/data/BSS footprint (62,232 text, 280 data, 120 BSS). Its host and Amiga
+The `-Os` 68020/libnix compiler currently has a 70,872-byte linked
+text/data/BSS footprint (70,472 text, 280 data, 120 BSS). Its host and Amiga
 builds emit byte-identical ordinary, local-heavy, conditional, loop,
-loop-control, division, exact-width, immutable-value, and synthetic spilling
-`-O1` assembly.
-Relative to the exact-width tranche, immutable parsing, pool validation, and
-dual-class ABI support add 5,132 text bytes and no linked data/BSS bytes. This
-growth is recorded explicitly; pool capacity is arena storage allocated while
-compiling, not permanent linked BSS.
+loop-control, division, exact-width, immutable-value, fixed-point,
+fixed-division, conversion, and synthetic spilling `-O1` assembly. The
+conversion tranche adds 3,612 text bytes over the fixed-division compiler and
+no linked data/BSS bytes. This growth is recorded explicitly; the generated
+fixed-point paths remain inline and call no runtime helper.
 Unconditional jumps to the physically next block are elided at both
 optimization levels. This
 lets the dedicated latch normalize the IR without adding an extra runtime
@@ -249,3 +287,19 @@ descriptors and payload bytes, O1 reduces 196 bytes to 136, 46-47 executed
 instructions to 23-24, and stack high-water from 28 bytes to 16. Runtime
 equality remains a register-sized pointer or ID comparison; literal decoding,
 deduplication, and symbol interning occur only during compilation.
+
+On the fixed-point corpus, O1 reduces the image from 196 to 104 bytes, the four
+paths from 57-58 to 25-26 instructions, and stack high-water from 28 to 16
+bytes. These counts include saving/restoring `D7`; they establish a compact
+native arithmetic path, not a cycle-accurate claim for physical A1200 memory.
+
+On the fixed-division corpus, O1 reduces the image from 300 to 164 bytes. Its
+normal paths fall from 95-101 to 51-55 instructions, while its dynamic-zero
+fault paths retain exact source locations. O1 uses at most 16 callee stack
+bytes, including preservation of `D6-D7` and two temporary long words during
+each division; O0 reaches 28 bytes.
+
+On the explicit-conversion corpus, O1 reduces the image from 208 to 112 bytes.
+Its normal paths fall from 40-50 to 22-26 instructions and its range-fault
+paths from 15 to 11; both preserve the exact source location. O1 uses 16
+callee stack bytes, versus 28-32 at O0.

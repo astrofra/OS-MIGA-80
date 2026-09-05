@@ -120,6 +120,38 @@ static unsigned int make_normalize_integer(
                      MIGA80_INVALID_VALUE, 0U, 0U, line, column, diagnostic);
 }
 
+static unsigned int make_numeric_conversion(
+    struct miga80_value_function *function,
+    enum miga80_value_opcode opcode, unsigned int operand,
+    unsigned int line, unsigned int column,
+    struct miga80_diagnostic *diagnostic)
+{
+    uint32_t constant;
+
+    if (is_constant(function, operand, &constant)) {
+        if (opcode == MIGA80_VALUE_FIX_FROM_I32) {
+            uint32_t converted;
+
+            if (!miga80_convert_i32_to_fix(constant, &converted)) {
+                (void)fail(diagnostic, line, column,
+                           "conversion to fix is out of range");
+                return MIGA80_INVALID_VALUE;
+            }
+            return make_constant(function, MIGA80_TYPE_FIX, converted,
+                                 line, column, diagnostic);
+        }
+        return make_constant(function, MIGA80_TYPE_I32,
+                             miga80_convert_fix_to_i32(constant), line,
+                             column, diagnostic);
+    }
+    return add_value(
+        function,
+        opcode == MIGA80_VALUE_FIX_FROM_I32 ? MIGA80_TYPE_FIX
+                                            : MIGA80_TYPE_I32,
+        opcode, operand, MIGA80_INVALID_VALUE, 0U, 0U, line, column,
+        diagnostic);
+}
+
 static uint32_t fold_comparison(enum miga80_value_opcode opcode,
                                 uint32_t left, uint32_t right)
 {
@@ -176,7 +208,8 @@ static unsigned int make_binary(struct miga80_value_function *function,
     int left_is_constant = is_constant(function, left, &left_constant);
     int right_is_constant = is_constant(function, right, &right_constant);
 
-    if ((opcode == MIGA80_VALUE_ADD || opcode == MIGA80_VALUE_MUL) &&
+    if ((opcode == MIGA80_VALUE_ADD || opcode == MIGA80_VALUE_MUL ||
+         opcode == MIGA80_VALUE_MUL_FIX) &&
         left_is_constant && !right_is_constant) {
         const unsigned int temporary = left;
 
@@ -186,7 +219,8 @@ static unsigned int make_binary(struct miga80_value_function *function,
         left_is_constant = 0;
         right_is_constant = 1;
     }
-    if ((opcode == MIGA80_VALUE_DIV || opcode == MIGA80_VALUE_DIV_U) &&
+    if ((opcode == MIGA80_VALUE_DIV_FIX || opcode == MIGA80_VALUE_DIV ||
+         opcode == MIGA80_VALUE_DIV_U) &&
         right_is_constant &&
         right_constant == 0U) {
         (void)fail(diagnostic, line, column,
@@ -202,6 +236,14 @@ static unsigned int make_binary(struct miga80_value_function *function,
             folded = left_constant - right_constant;
         } else if (opcode == MIGA80_VALUE_MUL) {
             folded = left_constant * right_constant;
+        } else if (opcode == MIGA80_VALUE_MUL_FIX) {
+            folded = miga80_multiply_fix(left_constant, right_constant);
+        } else if (opcode == MIGA80_VALUE_DIV_FIX) {
+            if (!miga80_divide_fix(left_constant, right_constant, &folded)) {
+                (void)fail(diagnostic, line, column,
+                           "division by zero in constant expression");
+                return MIGA80_INVALID_VALUE;
+            }
         } else if (opcode == MIGA80_VALUE_DIV) {
             if (!miga80_divide_i32(left_constant, right_constant, &folded)) {
                 (void)fail(diagnostic, line, column,
@@ -236,19 +278,29 @@ static unsigned int make_binary(struct miga80_value_function *function,
                                  diagnostic);
         }
     }
-    if (opcode == MIGA80_VALUE_MUL && right_is_constant) {
+    if ((opcode == MIGA80_VALUE_MUL || opcode == MIGA80_VALUE_MUL_FIX) &&
+        right_is_constant) {
         if (right_constant == 0U) {
             return make_constant(function, operand_type, 0U, line, column,
                                  diagnostic);
         }
-        if (right_constant == 1U) {
+        if ((opcode == MIGA80_VALUE_MUL && right_constant == 1U) ||
+            (opcode == MIGA80_VALUE_MUL_FIX &&
+             right_constant == MIGA80_ABI_FIX_ONE)) {
             return left;
         }
     }
-    if ((opcode == MIGA80_VALUE_DIV || opcode == MIGA80_VALUE_DIV_U) &&
+    if ((opcode == MIGA80_VALUE_DIV_FIX || opcode == MIGA80_VALUE_DIV ||
+         opcode == MIGA80_VALUE_DIV_U) &&
         right_is_constant) {
-        if (right_constant == 1U) {
+        if ((opcode == MIGA80_VALUE_DIV_FIX &&
+             right_constant == MIGA80_ABI_FIX_ONE) ||
+            (opcode != MIGA80_VALUE_DIV_FIX && right_constant == 1U)) {
             return left;
+        }
+        if (opcode == MIGA80_VALUE_DIV_FIX &&
+            right_constant == 0xffff0000U) {
+            return make_neg(function, left, line, column, diagnostic);
         }
         if (opcode == MIGA80_VALUE_DIV &&
             right_constant == UINT32_MAX) {
@@ -313,7 +365,11 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
 {
     return opcode == MIGA80_VALUE_NEG || opcode == MIGA80_VALUE_ADD ||
            opcode == MIGA80_VALUE_SUB || opcode == MIGA80_VALUE_MUL ||
+           opcode == MIGA80_VALUE_MUL_FIX ||
+           opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV || opcode == MIGA80_VALUE_DIV_U ||
+           opcode == MIGA80_VALUE_FIX_FROM_I32 ||
+           opcode == MIGA80_VALUE_I32_FROM_FIX ||
            opcode == MIGA80_VALUE_NORMALIZE_INTEGER ||
            comparison_opcode(opcode) || opcode == MIGA80_VALUE_PHI;
 }
@@ -321,7 +377,9 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
 static int opcode_has_right(enum miga80_value_opcode opcode)
 {
     return opcode == MIGA80_VALUE_ADD || opcode == MIGA80_VALUE_SUB ||
-           opcode == MIGA80_VALUE_MUL || opcode == MIGA80_VALUE_DIV ||
+           opcode == MIGA80_VALUE_MUL ||
+           opcode == MIGA80_VALUE_MUL_FIX || opcode == MIGA80_VALUE_DIV ||
+           opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV_U ||
            comparison_opcode(opcode) || opcode == MIGA80_VALUE_PHI;
 }
@@ -367,9 +425,18 @@ static int mark_live_values(struct miga80_value_function *function,
         const struct miga80_value_instruction *value =
             &function->values[value_index];
 
-        if ((value->opcode == MIGA80_VALUE_DIV ||
+        if ((value->opcode == MIGA80_VALUE_DIV_FIX ||
+             value->opcode == MIGA80_VALUE_DIV ||
              value->opcode == MIGA80_VALUE_DIV_U) &&
             !is_constant(function, value->right, NULL) &&
+            !mark_root(function, value_index, worklist, &worklist_size,
+                       diagnostic)) {
+            return 0;
+        }
+        if (value->opcode == MIGA80_VALUE_FIX_FROM_I32 &&
+            function->values[value->left].opcode !=
+                MIGA80_VALUE_I32_FROM_FIX &&
+            !is_constant(function, value->left, NULL) &&
             !mark_root(function, value_index, worklist, &worklist_size,
                        diagnostic)) {
             return 0;
@@ -411,6 +478,10 @@ static enum miga80_value_opcode value_opcode(enum miga80_ir_opcode opcode)
         return MIGA80_VALUE_SUB;
     case MIGA80_IR_MUL_I32:
         return MIGA80_VALUE_MUL;
+    case MIGA80_IR_MUL_FIX:
+        return MIGA80_VALUE_MUL_FIX;
+    case MIGA80_IR_DIV_FIX:
+        return MIGA80_VALUE_DIV_FIX;
     case MIGA80_IR_DIV_I32:
         return MIGA80_VALUE_DIV;
     case MIGA80_IR_DIV_U32:
@@ -830,6 +901,7 @@ static int lower_block_values(const struct miga80_ir_function *source,
 
         switch (instruction->opcode) {
         case MIGA80_IR_PUSH_I32:
+        case MIGA80_IR_PUSH_FIX:
             value = make_constant(result, instruction->type,
                                   instruction->operand, instruction->line,
                                   instruction->column, diagnostic);
@@ -877,9 +949,21 @@ static int lower_block_values(const struct miga80_ir_function *source,
                 result, stack[--stack_size], instruction->type,
                 instruction->line, instruction->column, diagnostic);
             break;
+        case MIGA80_IR_FIX_FROM_I32:
+            value = make_numeric_conversion(
+                result, MIGA80_VALUE_FIX_FROM_I32, stack[--stack_size],
+                instruction->line, instruction->column, diagnostic);
+            break;
+        case MIGA80_IR_I32_FROM_FIX:
+            value = make_numeric_conversion(
+                result, MIGA80_VALUE_I32_FROM_FIX, stack[--stack_size],
+                instruction->line, instruction->column, diagnostic);
+            break;
         case MIGA80_IR_ADD_I32:
         case MIGA80_IR_SUB_I32:
         case MIGA80_IR_MUL_I32:
+        case MIGA80_IR_MUL_FIX:
+        case MIGA80_IR_DIV_FIX:
         case MIGA80_IR_DIV_I32:
         case MIGA80_IR_DIV_U32:
         case MIGA80_IR_EQ_I32:

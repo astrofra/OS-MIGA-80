@@ -68,7 +68,7 @@ static int register_classes_are_valid(void)
 int main(void)
 {
     if (MIGA80_ABI_VERSION_MAJOR != 0U ||
-        MIGA80_ABI_VERSION_MINOR != 4U ||
+        MIGA80_ABI_VERSION_MINOR != 6U ||
         MIGA80_ABI_MAX_ARGUMENTS != 5U ||
         MIGA80_ABI_SCALAR_RETURN_REGISTER != MIGA80_ABI_D0 ||
         MIGA80_ABI_ADDRESS_RETURN_REGISTER != MIGA80_ABI_A0 ||
@@ -78,11 +78,16 @@ int main(void)
         MIGA80_ABI_RUNTIME_FAULT_HANDLER_OFFSET != 0U ||
         MIGA80_ABI_RUNTIME_CONTEXT_MIN_SIZE != 4U ||
         MIGA80_ABI_FAULT_DIVISION_BY_ZERO != 1U ||
+        MIGA80_ABI_FAULT_CONVERSION_OUT_OF_RANGE != 2U ||
         MIGA80_ABI_FAULT_CODE_REGISTER != MIGA80_ABI_D0 ||
         MIGA80_ABI_FAULT_LINE_REGISTER != MIGA80_ABI_D1 ||
         MIGA80_ABI_FAULT_COLUMN_REGISTER != MIGA80_ABI_D2 ||
         MIGA80_ABI_FAULT_SCRATCH_REGISTER != MIGA80_ABI_A0 ||
         MIGA80_ABI_BOOL_FALSE != 0U || MIGA80_ABI_BOOL_TRUE != 1U ||
+        MIGA80_ABI_FIX_FRACTION_BITS != 16U ||
+        MIGA80_ABI_FIX_ONE != 0x00010000U ||
+        MIGA80_ABI_FIX_MIN != 0x80000000U ||
+        MIGA80_ABI_FIX_MAX != 0x7fffffffU ||
         !argument_registers_are_valid() || !register_classes_are_valid() ||
         !miga80_abi_frame_size_is_valid(0U) ||
         !miga80_abi_frame_size_is_valid(4U) ||
@@ -93,6 +98,6 @@ int main(void)
         return 1;
     }
 
-    printf("PASS  MIGA Lua native ABI 0.4 scalar/address, stack, and fault contract\n");
+    printf("PASS  MIGA Lua native ABI 0.6 scalar/address, stack, and fault contract\n");
     return 0;
 }

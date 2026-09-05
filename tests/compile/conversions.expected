@@ -1,0 +1,18 @@
+PASS  generated-o0/fraction D0=00018000 instructions=40 code_bytes=208 stack_bytes=32
+PASS  generated-o0/positive_trunc D0=00030000 instructions=49 code_bytes=208 stack_bytes=32
+PASS  generated-o0/negative_trunc D0=fffd0000 instructions=50 code_bytes=208 stack_bytes=32
+PASS  generated-o0/negative_fraction D0=fffc4000 instructions=41 code_bytes=208 stack_bytes=32
+PASS  generated-o0/positive_limit D0=7fff8000 instructions=40 code_bytes=208 stack_bytes=32
+PASS  generated-o0/negative_limit D0=80008000 instructions=40 code_bytes=208 stack_bytes=32
+PASS  generated-o0/positive_range fault=2 source=3:28 instructions=15 code_bytes=208 stack_bytes=28
+PASS  generated-o0/negative_range fault=2 source=3:28 instructions=15 code_bytes=208 stack_bytes=28
+PASS  generated-o1/fraction D0=00018000 instructions=22 code_bytes=112 stack_bytes=16
+PASS  generated-o1/positive_trunc D0=00030000 instructions=25 code_bytes=112 stack_bytes=16
+PASS  generated-o1/negative_trunc D0=fffd0000 instructions=26 code_bytes=112 stack_bytes=16
+PASS  generated-o1/negative_fraction D0=fffc4000 instructions=23 code_bytes=112 stack_bytes=16
+PASS  generated-o1/positive_limit D0=7fff8000 instructions=22 code_bytes=112 stack_bytes=16
+PASS  generated-o1/negative_limit D0=80008000 instructions=22 code_bytes=112 stack_bytes=16
+PASS  generated-o1/positive_range fault=2 source=3:28 instructions=11 code_bytes=112 stack_bytes=16
+PASS  generated-o1/negative_range fault=2 source=3:28 instructions=11 code_bytes=112 stack_bytes=16
+PASS  compiler explicit i32/fix conversions match typed-IR oracle (12 values; 4 controlled faults)
+PASS  compiler O1 conversion code size reduced from 208 to 112 bytes

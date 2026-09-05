@@ -1,1 +1,1 @@
-PASS  compiler CFG, narrow integers, immutable values, integer division faults, loop control, phis, O0/O1, and spills
+PASS  compiler CFG, narrow integers, fixed point/division/conversions, immutable values, numeric faults, loop control, phis, O0/O1, and spills

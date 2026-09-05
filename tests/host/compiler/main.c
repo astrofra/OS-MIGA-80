@@ -139,7 +139,7 @@ static int test_valid_function(void)
         fread(assembly_prefix, 1U, sizeof(assembly_prefix) - 1U, assembly);
     assembly_prefix[assembly_prefix_size] = '\0';
     if (ferror(assembly) ||
-        strstr(assembly_prefix, "native ABI 0.4") == NULL ||
+        strstr(assembly_prefix, "native ABI 0.6") == NULL ||
         strstr(assembly_prefix, "move.l  %d0,-4(%a6)") == NULL) {
         emitted = 0;
     }
@@ -489,6 +489,470 @@ static int test_narrow_integer_types(void)
     }
     closed = fclose(assembly);
     return emitted && closed == 0;
+}
+
+static int test_fixed_point(void)
+{
+    static const char source[] =
+        "function fixed(a: fix, b: fix, choose: bool): fix\n"
+        "  local product: fix = a * b\n"
+        "  product = product * 0.5\n"
+        "  if (a < b) == choose then product = product + 1.5\n"
+        "  else product = product - 0.25 end\n"
+        "  return -product\n"
+        "end\n";
+    static const char comparison_source[] =
+        "function fixed_order(a: fix, b: fix): bool return a < b end";
+    static const char folded_source[] =
+        "function fixed_folded(): fix return -0.1 * 0.1 end";
+    static const char pressure_source[] =
+        "function fixed_pressure(a: fix, b: fix, c: fix): fix\n"
+        "  local p0: fix = a * b\n"
+        "  local p1: fix = a * b\n"
+        "  local p2: fix = a * b\n"
+        "  local p3: fix = a * b\n"
+        "  local p4: fix = a * b\n"
+        "  local p5: fix = a * b\n"
+        "  return p0 + p1 + p2 + p3 + p4 + p5 + c\n"
+        "end\n";
+    struct miga80_ir_function ir;
+    struct miga80_value_function value_ir;
+    struct miga80_diagnostic diagnostic;
+    char assembly_text[8192];
+    uint32_t parsed;
+    uint32_t result;
+    size_t assembly_size;
+    unsigned int index;
+    int saw_fix_multiply = 0;
+    FILE *assembly;
+    int emitted;
+    int closed;
+
+    if (!miga80_parse_fix_literal("0.1", 3U, &parsed) ||
+        parsed != UINT32_C(0x0000199a) ||
+        !miga80_parse_fix_literal("-0.1", 4U, &parsed) ||
+        parsed != UINT32_C(0xffffe666) ||
+        !miga80_parse_fix_literal("32767.99998", 11U, &parsed) ||
+        parsed != UINT32_C(0x7fffffff) ||
+        !miga80_parse_fix_literal("-32768.0", 8U, &parsed) ||
+        parsed != UINT32_C(0x80000000) ||
+        miga80_parse_fix_literal("1", 1U, &parsed) ||
+        miga80_parse_fix_literal("1.1234567890", 12U, &parsed) ||
+        miga80_parse_fix_literal("32768.0", 7U, &parsed) ||
+        miga80_multiply_fix(UINT32_C(0xffffe666),
+                           UINT32_C(0x0000199a)) !=
+            UINT32_C(0xfffffd70) ||
+        !compile_source(source, &ir, &diagnostic) ||
+        ir.parameter_types[0] != MIGA80_TYPE_FIX ||
+        ir.parameter_types[1] != MIGA80_TYPE_FIX ||
+        ir.result_type != MIGA80_TYPE_FIX) {
+        return 0;
+    }
+    for (index = 0U; index < ir.instruction_count; ++index) {
+        if (ir.instructions[index].opcode == MIGA80_IR_MUL_FIX) {
+            saw_fix_multiply = 1;
+        }
+    }
+    if (!saw_fix_multiply ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0x00020000),
+                               UINT32_C(0x00030000), 1U},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0xfffb8000) ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0xffffe666),
+                               UINT32_C(0x0000199a), 1U},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0xfffe8148) ||
+        !compile_source(comparison_source, &ir, &diagnostic) ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0xffff0000),
+                               UINT32_C(0x00008000)},
+            2U, &result, &diagnostic) ||
+        result != 1U || !compile_source(folded_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic) ||
+        value_ir.values[value_ir.result].opcode != MIGA80_VALUE_CONSTANT ||
+        value_ir.values[value_ir.result].immediate !=
+            UINT32_C(0xfffffd70) ||
+        !compile_source(source, &ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k(assembly, &ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "muls.l  %d1,%d2:%d0") == NULL ||
+        strstr(assembly_text, "slt") == NULL ||
+        strstr(assembly_text, "move.w  %d2,%d0") == NULL ||
+        strstr(assembly_text, "swap    %d0") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k_o1(assembly, &value_ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "%d7:%d") == NULL ||
+        strstr(assembly_text, "slt") == NULL ||
+        strstr(assembly_text, "move.w  %d7,%d") == NULL ||
+        strstr(assembly_text, "%d7,-(%a7)") == NULL ||
+        strstr(assembly_text, "(%a7)+,%d3/%d7") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !compile_source(pressure_source, &ir, &diagnostic) ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0x00018000),
+                               UINT32_C(0xfffe0000),
+                               UINT32_C(0x00004000)},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0xffee4000) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k_o1(assembly, &value_ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) || strstr(assembly_text, "%d7:%d6") == NULL ||
+        strstr(assembly_text, "move.w  %d7,%d6") == NULL ||
+        strstr(assembly_text, "move.l  %d6,-") == NULL ||
+        strstr(assembly_text, "%d6/%d7,-(%a7)") == NULL ||
+        strstr(assembly_text, "(%a7)+,%d3/%d4/%d5/%d6/%d7") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    return emitted && closed == 0;
+}
+
+static int test_fixed_division(void)
+{
+    static const char source[] =
+        "function fixed_div(a: fix, b: fix): fix return (a / b) / 0.5 end";
+    static const char folded_source[] =
+        "function fixed_div_folded(): fix return 1.0 / 3.0 end";
+    static const char dead_fault_source[] =
+        "function fixed_div_dead(a: fix, b: fix): fix "
+        "local q: fix = a / b q = 1.0 return q end";
+    static const char pressure_source[] =
+        "function fixed_div_pressure(a: fix, b: fix, c: fix): fix\n"
+        "  local q0: fix = a / b\n"
+        "  local q1: fix = a / b\n"
+        "  local q2: fix = a / b\n"
+        "  local q3: fix = a / b\n"
+        "  local q4: fix = a / b\n"
+        "  local q5: fix = a / b\n"
+        "  return q0 + q1 + q2 + q3 + q4 + q5 + c\n"
+        "end\n";
+    struct miga80_ir_function ir;
+    struct miga80_value_function value_ir;
+    struct miga80_diagnostic diagnostic;
+    char assembly_text[16384];
+    uint32_t result;
+    size_t assembly_size;
+    unsigned int index;
+    int saw_fix_division = 0;
+    FILE *assembly;
+    int emitted;
+    int closed;
+
+    if (!miga80_divide_fix(UINT32_C(0x00010000),
+                           UINT32_C(0x00030000), &result) ||
+        result != UINT32_C(0x00005555) ||
+        !miga80_divide_fix(UINT32_C(0xffff0000),
+                           UINT32_C(0x00030000), &result) ||
+        result != UINT32_C(0xffffaaab) ||
+        !miga80_divide_fix(UINT32_C(0x00018000), 2U, &result) ||
+        result != UINT32_C(0xc0000000) ||
+        miga80_divide_fix(MIGA80_ABI_FIX_ONE, 0U, &result) ||
+        !compile_source(source, &ir, &diagnostic)) {
+        return 0;
+    }
+    for (index = 0U; index < ir.instruction_count; ++index) {
+        if (ir.instructions[index].opcode == MIGA80_IR_DIV_FIX) {
+            saw_fix_division = 1;
+        }
+    }
+    if (!saw_fix_division ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0x00010000),
+                               UINT32_C(0x00030000)},
+            2U, &result, &diagnostic) ||
+        result != UINT32_C(0x0000aaaa) ||
+        !compile_source(folded_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic) ||
+        value_ir.values[value_ir.result].opcode != MIGA80_VALUE_CONSTANT ||
+        value_ir.values[value_ir.result].immediate !=
+            UINT32_C(0x00005555) ||
+        !compile_source(source, &ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k(assembly, &ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "divul.l %d1,%d2:%d0") == NULL ||
+        strstr(assembly_text, "beq     .L_fixed_div_divzero_") == NULL ||
+        strstr(assembly_text, "eor.l   %d1,%d2") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k_o1(assembly, &value_ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "divul.l %d6,%d7:%d") == NULL ||
+        strstr(assembly_text, "move.l  #0x00008000,%d6") == NULL ||
+        strstr(assembly_text, "%d6/%d7,-(%a7)") == NULL ||
+        strstr(assembly_text, "(%a7)+,%d6/%d7") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !compile_source(dead_fault_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    saw_fix_division = 0;
+    for (index = 0U; index < value_ir.value_count; ++index) {
+        if (value_ir.values[index].opcode == MIGA80_VALUE_DIV_FIX &&
+            value_ir.values[index].live) {
+            saw_fix_division = 1;
+        }
+    }
+    if (!saw_fix_division ||
+        !compile_source(pressure_source, &ir, &diagnostic) ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0x00010000),
+                               UINT32_C(0x00030000),
+                               UINT32_C(0x00004000)},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0x00023ffe) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k_o1(assembly, &value_ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) || strstr(assembly_text, "%d7:%d5") == NULL ||
+        strstr(assembly_text, "move.l  %d5,-") == NULL ||
+        strstr(assembly_text, "%d5/%d6/%d7,-(%a7)") == NULL ||
+        strstr(assembly_text, "(%a7)+,%d3/%d4/%d5/%d6/%d7") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    return emitted && closed == 0;
+}
+
+static int test_explicit_fixed_conversions(void)
+{
+    static const char source[] =
+        "function conversions(value: i32, fraction: fix, use_integer: bool): fix\n"
+        "  local converted: fix = fix(value)\n"
+        "  local truncated: i32 = i32(fraction)\n"
+        "  if use_integer then converted = converted + fix(truncated)\n"
+        "  else converted = converted + fraction end\n"
+        "  return converted\n"
+        "end\n";
+    static const char folded_source[] =
+        "function conversion_folded(): i32 return i32(-1.75) end";
+    static const char folded_fix_source[] =
+        "function conversion_fix_folded(): fix return fix(32767) end";
+    static const char folded_fix_min_source[] =
+        "function conversion_fix_min_folded(): fix "
+        "return fix(-32767 - 1) end";
+    static const char dead_fault_source[] =
+        "function conversion_dead(value: i32): fix "
+        "local converted: fix = fix(value) converted = 1.0 "
+        "return converted end";
+    static const char dead_safe_source[] =
+        "function conversion_safe_dead(value: fix): fix "
+        "local converted: fix = fix(i32(value)) converted = 1.0 "
+        "return converted end";
+    struct miga80_ir_function ir;
+    struct miga80_value_function value_ir;
+    struct miga80_diagnostic diagnostic;
+    char assembly_text[16384];
+    uint32_t converted;
+    uint32_t result;
+    size_t assembly_size;
+    unsigned int index;
+    unsigned int fix_from_count = 0U;
+    unsigned int i32_from_count = 0U;
+    int saw_live_checked_conversion = 0;
+    FILE *assembly;
+    int emitted;
+    int closed;
+
+    if (!miga80_convert_i32_to_fix(0U, &converted) || converted != 0U ||
+        !miga80_convert_i32_to_fix(32767U, &converted) ||
+        converted != UINT32_C(0x7fff0000) ||
+        !miga80_convert_i32_to_fix(UINT32_C(0xffff8000), &converted) ||
+        converted != UINT32_C(0x80000000) ||
+        miga80_convert_i32_to_fix(32768U, &converted) ||
+        miga80_convert_i32_to_fix(UINT32_C(0xffff7fff), &converted) ||
+        miga80_convert_i32_to_fix(0U, NULL) ||
+        miga80_convert_fix_to_i32(UINT32_C(0x0001c000)) != 1U ||
+        miga80_convert_fix_to_i32(UINT32_C(0xfffe4000)) !=
+            UINT32_C(0xffffffff) ||
+        miga80_convert_fix_to_i32(UINT32_C(0x80000000)) !=
+            UINT32_C(0xffff8000) ||
+        !compile_source(source, &ir, &diagnostic)) {
+        return 0;
+    }
+    for (index = 0U; index < ir.instruction_count; ++index) {
+        if (ir.instructions[index].opcode == MIGA80_IR_FIX_FROM_I32) {
+            ++fix_from_count;
+        } else if (ir.instructions[index].opcode == MIGA80_IR_I32_FROM_FIX) {
+            ++i32_from_count;
+        }
+    }
+    if (fix_from_count != 2U || i32_from_count != 1U ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){2U, UINT32_C(0x0001c000), 1U},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0x00030000) ||
+        !miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){UINT32_C(0xfffffffe),
+                               UINT32_C(0xfffe4000), 0U},
+            3U, &result, &diagnostic) ||
+        result != UINT32_C(0xfffc4000) ||
+        miga80_evaluate_ir(
+            &ir,
+            (const uint32_t[]){32768U, UINT32_C(0x00010000), 0U},
+            3U, &result, &diagnostic) ||
+        diagnostic.line != 2U || diagnostic.column != 26U ||
+        strcmp(diagnostic.message, "conversion out of range") != 0) {
+        return 0;
+    }
+
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k(assembly, &ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "cmp.l   #0x00010000,%d0") == NULL ||
+        strstr(assembly_text, ".L_conversions_fault_conversion:") == NULL ||
+        strstr(assembly_text, "moveq   #2,%d0") == NULL ||
+        strstr(assembly_text, ".L_conversions_fix_to_i32_positive_") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    assembly = tmpfile();
+    if (assembly == NULL) {
+        return 0;
+    }
+    emitted = miga80_emit_gnu_m68k_o1(assembly, &value_ir, &diagnostic);
+    rewind(assembly);
+    assembly_size =
+        fread(assembly_text, 1U, sizeof(assembly_text) - 1U, assembly);
+    assembly_text[assembly_size] = '\0';
+    if (ferror(assembly) ||
+        strstr(assembly_text, "cmp.l   #0x00010000,%d") == NULL ||
+        strstr(assembly_text, ".L_conversions_fault_conversion:") == NULL ||
+        strstr(assembly_text, ".L_conversions_fix_to_i32_positive_") == NULL) {
+        emitted = 0;
+    }
+    closed = fclose(assembly);
+    if (!emitted || closed != 0 ||
+        !compile_source(folded_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic) ||
+        value_ir.values[value_ir.result].opcode != MIGA80_VALUE_CONSTANT ||
+        value_ir.values[value_ir.result].immediate !=
+            UINT32_C(0xffffffff) ||
+        !compile_source(folded_fix_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic) ||
+        value_ir.values[value_ir.result].opcode != MIGA80_VALUE_CONSTANT ||
+        value_ir.values[value_ir.result].immediate !=
+            UINT32_C(0x7fff0000) ||
+        !compile_source(folded_fix_min_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic) ||
+        value_ir.values[value_ir.result].opcode != MIGA80_VALUE_CONSTANT ||
+        value_ir.values[value_ir.result].immediate !=
+            UINT32_C(0x80000000) ||
+        !compile_source(dead_fault_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    for (index = 0U; index < value_ir.value_count; ++index) {
+        if (value_ir.values[index].opcode == MIGA80_VALUE_FIX_FROM_I32 &&
+            value_ir.values[index].live) {
+            saw_live_checked_conversion = 1;
+        }
+    }
+    if (!saw_live_checked_conversion ||
+        !compile_source(dead_safe_source, &ir, &diagnostic) ||
+        !miga80_build_value_ir(&ir, &value_ir, &diagnostic)) {
+        return 0;
+    }
+    for (index = 0U; index < value_ir.value_count; ++index) {
+        if (value_ir.values[index].opcode == MIGA80_VALUE_FIX_FROM_I32 &&
+            value_ir.values[index].live) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int test_immutable_values(void)
@@ -1297,6 +1761,9 @@ int main(int argc, char **argv)
     if (!test_valid_function() || !test_constant_folding() ||
         !test_signed_division_and_fault_liveness() ||
         !test_narrow_integer_types() ||
+        !test_fixed_point() ||
+        !test_fixed_division() ||
+        !test_explicit_fixed_conversions() ||
         !test_immutable_values() ||
         !test_immutable_pool_dedup_capacity() ||
         !test_string_escapes() ||
@@ -1343,13 +1810,30 @@ int main(int argc, char **argv)
                       34U, "division by zero in constant expression") ||
         !expect_error("function f(): i32 local x: bool = true x /= 1 "
                       "return 0 end",
-                      1U, 42U, "operator '/=' requires integer target") ||
+                      1U, 42U, "operator '/=' requires numeric target") ||
         !expect_error("function f(): u8 local x: u8 = 256 return x end", 1U,
                       24U, "local initializer requires u8, found i32") ||
         !expect_error("function f(a: u8, b: i16): u8 return a + b end", 1U,
                       40U, "matching integer operands") ||
         !expect_error("function f(a: u8): u8 return -a end", 1U, 30U,
                       "unary '-' requires a signed integer") ||
+        !expect_error("function f(): fix return 1 end", 1U, 19U,
+                      "function return requires fix, found i32") ||
+        !expect_error("function f(a: fix): fix return a + 1 end", 1U, 34U,
+                      "matching numeric operands") ||
+        !expect_error("function f(): fix return fix(32768) end", 1U, 26U,
+                      "conversion to fix is out of range") ||
+        !expect_error("function f(): fix return fix(1.0) end", 1U, 26U,
+                      "conversion to fix requires i32, found fix") ||
+        !expect_error("function f(): i32 return i32(1) end", 1U, 26U,
+                      "conversion to i32 requires fix, found i32") ||
+        !expect_error("function f(a: fix): fix return a / (1.0 - 1.0) end",
+                      1U, 34U,
+                      "division by zero in constant expression") ||
+        !expect_error("function f(): fix return 1.1234567890 end", 1U, 26U,
+                      "exceeds 9 fractional digits") ||
+        !expect_error("function f(): fix return 32768.0 end", 1U, 26U,
+                      "fix literal is out of range") ||
         !expect_error("function f(a: string, b: string, c: string): bool "
                       "return true end",
                       1U, 34U, "at most 2 address parameters") ||
@@ -1386,7 +1870,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf("PASS  compiler CFG, narrow integers, immutable values, integer "
-           "division faults, loop control, phis, O0/O1, and spills\n");
+    printf("PASS  compiler CFG, narrow integers, fixed point/division/conversions, "
+           "immutable values, numeric faults, loop control, phis, O0/O1, and spills\n");
     return 0;
 }

@@ -1,0 +1,22 @@
+PASS  generated-o0/exact D0=00020000 instructions=95 code_bytes=300 stack_bytes=28
+PASS  generated-o0/positive_trunc D0=00005555 instructions=95 code_bytes=300 stack_bytes=28
+PASS  generated-o0/negative_dividend D0=ffffaaab instructions=101 code_bytes=300 stack_bytes=28
+PASS  generated-o0/negative_divisor D0=ffffaaab instructions=101 code_bytes=300 stack_bytes=28
+PASS  generated-o0/both_negative D0=00005555 instructions=97 code_bytes=300 stack_bytes=28
+PASS  generated-o0/fractional D0=00070000 instructions=95 code_bytes=300 stack_bytes=28
+PASS  generated-o0/wrap D0=c0000000 instructions=99 code_bytes=300 stack_bytes=28
+PASS  generated-o0/min_wrap D0=80000000 instructions=101 code_bytes=300 stack_bytes=28
+PASS  generated-o0/zero_expression fault=1 source=3:29 instructions=16 code_bytes=300 stack_bytes=28
+PASS  generated-o0/zero_update fault=1 source=4:14 instructions=46 code_bytes=300 stack_bytes=28
+PASS  generated-o1/exact D0=00020000 instructions=51 code_bytes=164 stack_bytes=16
+PASS  generated-o1/positive_trunc D0=00005555 instructions=51 code_bytes=164 stack_bytes=16
+PASS  generated-o1/negative_dividend D0=ffffaaab instructions=55 code_bytes=164 stack_bytes=16
+PASS  generated-o1/negative_divisor D0=ffffaaab instructions=55 code_bytes=164 stack_bytes=16
+PASS  generated-o1/both_negative D0=00005555 instructions=53 code_bytes=164 stack_bytes=16
+PASS  generated-o1/fractional D0=00070000 instructions=51 code_bytes=164 stack_bytes=16
+PASS  generated-o1/wrap D0=c0000000 instructions=53 code_bytes=164 stack_bytes=16
+PASS  generated-o1/min_wrap D0=80000000 instructions=55 code_bytes=164 stack_bytes=16
+PASS  generated-o1/zero_expression fault=1 source=3:29 instructions=10 code_bytes=164 stack_bytes=8
+PASS  generated-o1/zero_update fault=1 source=4:14 instructions=34 code_bytes=164 stack_bytes=16
+PASS  compiler Q16.16 division matches typed-IR oracle (16 values; 4 controlled faults)
+PASS  compiler O1 fixed-division code size reduced from 300 to 164 bytes

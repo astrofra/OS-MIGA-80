@@ -52,7 +52,7 @@ int miga80_emit_gnu_m68k_normalize_integer(FILE *output,
     if (type == MIGA80_TYPE_U16) {
         return output_line(output, "        and.l   #0xffff,%s\n", reg);
     }
-    return type == MIGA80_TYPE_I32;
+    return type == MIGA80_TYPE_I32 || type == MIGA80_TYPE_FIX;
 }
 
 int miga80_emit_gnu_m68k_string_address(FILE *output,
@@ -154,6 +154,31 @@ int miga80_emit_gnu_m68k_fault_tail(FILE *output,
         MIGA80_ABI_RUNTIME_FAULT_HANDLER_OFFSET);
 }
 
+int miga80_emit_gnu_m68k_conversion_fault_site(
+    FILE *output, const char *function_name, unsigned int site,
+    unsigned int line, unsigned int column)
+{
+    return output_line(output, ".L_%s_conversion_%u:\n", function_name,
+                       site) &&
+           output_fault_immediate(output, line, "%d1") &&
+           output_fault_immediate(output, column, "%d2") &&
+           output_line(output, "        bra     .L_%s_fault_conversion\n",
+                       function_name);
+}
+
+int miga80_emit_gnu_m68k_conversion_fault_tail(
+    FILE *output, const char *function_name)
+{
+    return output_line(
+        output,
+        ".L_%s_fault_conversion:\n"
+        "        moveq   #%u,%%d0\n"
+        "        movea.l %u(%%a5),%%a0\n"
+        "        jmp     (%%a0)\n",
+        function_name, MIGA80_ABI_FAULT_CONVERSION_OUT_OF_RANGE,
+        MIGA80_ABI_RUNTIME_FAULT_HANDLER_OFFSET);
+}
+
 int miga80_emit_gnu_m68k(FILE *output,
                          const struct miga80_ir_function *function,
                          struct miga80_diagnostic *diagnostic)
@@ -178,7 +203,7 @@ int miga80_emit_gnu_m68k(FILE *output,
     frame_size = (function->parameter_count + function->local_count) * 4U;
     if (!miga80_abi_frame_size_is_valid(frame_size)) {
         (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
-                       "function frame violates native ABI 0.4");
+                       "function frame violates native ABI 0.6");
         return 0;
     }
 
@@ -212,7 +237,7 @@ int miga80_emit_gnu_m68k(FILE *output,
             diagnostic->line = 0U;
             diagnostic->column = 0U;
             (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
-                           "unable to map argument through native ABI 0.4");
+                           "unable to map argument through native ABI 0.6");
             return 0;
         }
         if (!output_line(output, "        move.l  %s,-%u(%%a6)\n",
@@ -238,6 +263,7 @@ int miga80_emit_gnu_m68k(FILE *output,
 
         switch (instruction->opcode) {
         case MIGA80_IR_PUSH_I32:
+        case MIGA80_IR_PUSH_FIX:
         case MIGA80_IR_PUSH_BOOL:
             success = output_line(output,
                                   "        move.l  #0x%08x,-(%%a7)\n",
@@ -327,9 +353,37 @@ int miga80_emit_gnu_m68k(FILE *output,
                                       "        move.l  %%d0,-(%%a7)\n");
             }
             break;
+        case MIGA80_IR_FIX_FROM_I32:
+            success = output_line(
+                output,
+                "        move.l  (%%a7)+,%%d0\n"
+                "        add.l   #0x00008000,%%d0\n"
+                "        cmp.l   #0x00010000,%%d0\n"
+                "        bcc     .L_%s_conversion_%u\n"
+                "        sub.l   #0x00008000,%%d0\n"
+                "        swap    %%d0\n"
+                "        clr.w   %%d0\n"
+                "        move.l  %%d0,-(%%a7)\n",
+                function->name, index);
+            break;
+        case MIGA80_IR_I32_FROM_FIX:
+            success = output_line(
+                output,
+                "        move.l  (%%a7)+,%%d0\n"
+                "        tst.l   %%d0\n"
+                "        bpl     .L_%s_fix_to_i32_positive_%u\n"
+                "        add.l   #0x0000ffff,%%d0\n"
+                ".L_%s_fix_to_i32_positive_%u:\n"
+                "        swap    %%d0\n"
+                "        ext.l   %%d0\n"
+                "        move.l  %%d0,-(%%a7)\n",
+                function->name, index, function->name, index);
+            break;
         case MIGA80_IR_ADD_I32:
         case MIGA80_IR_SUB_I32:
         case MIGA80_IR_MUL_I32:
+        case MIGA80_IR_MUL_FIX:
+        case MIGA80_IR_DIV_FIX:
         case MIGA80_IR_DIV_I32:
         case MIGA80_IR_DIV_U32:
         case MIGA80_IR_EQ_I32:
@@ -355,6 +409,49 @@ int miga80_emit_gnu_m68k(FILE *output,
             } else if (success &&
                        instruction->opcode == MIGA80_IR_MUL_I32) {
                 success = output_line(output, "        muls.l  %%d1,%%d0\n");
+            } else if (success &&
+                       instruction->opcode == MIGA80_IR_MUL_FIX) {
+                success = output_line(output,
+                                      "        muls.l  %%d1,%%d2:%%d0\n"
+                                      "        move.w  %%d2,%%d0\n"
+                                      "        swap    %%d0\n");
+            } else if (success &&
+                       instruction->opcode == MIGA80_IR_DIV_FIX) {
+                success = output_line(
+                    output,
+                    "        tst.l   %%d1\n"
+                    "        beq     .L_%s_divzero_%u\n"
+                    "        move.l  %%d0,%%d2\n"
+                    "        eor.l   %%d1,%%d2\n"
+                    "        move.l  %%d2,-(%%a7)\n"
+                    "        tst.l   %%d0\n"
+                    "        bpl     .L_%s_fixdiv_left_%u\n"
+                    "        neg.l   %%d0\n"
+                    ".L_%s_fixdiv_left_%u:\n"
+                    "        tst.l   %%d1\n"
+                    "        bpl     .L_%s_fixdiv_right_%u\n"
+                    "        neg.l   %%d1\n"
+                    ".L_%s_fixdiv_right_%u:\n"
+                    "        move.l  %%d0,%%d2\n"
+                    "        lsr.l   #8,%%d2\n"
+                    "        lsr.l   #8,%%d2\n"
+                    "        swap    %%d0\n"
+                    "        clr.w   %%d0\n"
+                    "        move.l  %%d0,-(%%a7)\n"
+                    "        move.l  %%d2,%%d0\n"
+                    "        moveq   #0,%%d2\n"
+                    "        divul.l %%d1,%%d2:%%d0\n"
+                    "        move.l  (%%a7)+,%%d0\n"
+                    "        divu.l  %%d1,%%d2:%%d0\n"
+                    "        move.l  (%%a7)+,%%d2\n"
+                    "        tst.l   %%d2\n"
+                    "        bpl     .L_%s_fixdiv_done_%u\n"
+                    "        neg.l   %%d0\n"
+                    ".L_%s_fixdiv_done_%u:\n",
+                    function->name, index, function->name, index,
+                    function->name, index, function->name, index,
+                    function->name, index, function->name, index,
+                    function->name, index);
             } else if (success &&
                        instruction->opcode == MIGA80_IR_DIV_I32) {
                 success = output_line(
@@ -404,6 +501,8 @@ int miga80_emit_gnu_m68k(FILE *output,
                 (instruction->opcode == MIGA80_IR_ADD_I32 ||
                  instruction->opcode == MIGA80_IR_SUB_I32 ||
                  instruction->opcode == MIGA80_IR_MUL_I32 ||
+                 instruction->opcode == MIGA80_IR_MUL_FIX ||
+                 instruction->opcode == MIGA80_IR_DIV_FIX ||
                  instruction->opcode == MIGA80_IR_DIV_I32 ||
                  instruction->opcode == MIGA80_IR_DIV_U32)) {
                 success = miga80_emit_gnu_m68k_normalize_integer(
@@ -464,7 +563,8 @@ int miga80_emit_gnu_m68k(FILE *output,
             const struct miga80_ir_instruction *instruction =
                 &function->instructions[index];
 
-            if (instruction->opcode != MIGA80_IR_DIV_I32 &&
+            if (instruction->opcode != MIGA80_IR_DIV_FIX &&
+                instruction->opcode != MIGA80_IR_DIV_I32 &&
                 instruction->opcode != MIGA80_IR_DIV_U32) {
                 continue;
             }
@@ -477,6 +577,30 @@ int miga80_emit_gnu_m68k(FILE *output,
         }
         if (has_division &&
             !miga80_emit_gnu_m68k_fault_tail(output, function->name)) {
+            return output_failure(diagnostic, NULL);
+        }
+    }
+
+    {
+        int has_conversion_fault = 0;
+
+        for (index = 0U; index < function->instruction_count; ++index) {
+            const struct miga80_ir_instruction *instruction =
+                &function->instructions[index];
+
+            if (instruction->opcode != MIGA80_IR_FIX_FROM_I32) {
+                continue;
+            }
+            if (!miga80_emit_gnu_m68k_conversion_fault_site(
+                    output, function->name, index, instruction->line,
+                    instruction->column)) {
+                return output_failure(diagnostic, instruction);
+            }
+            has_conversion_fault = 1;
+        }
+        if (has_conversion_fault &&
+            !miga80_emit_gnu_m68k_conversion_fault_tail(
+                output, function->name)) {
             return output_failure(diagnostic, NULL);
         }
     }

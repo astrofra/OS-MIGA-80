@@ -148,7 +148,7 @@ Even if generated code is never supposed to perform an unaligned access, detecti
 
 The local runner becomes much simpler once the compiler has a stable calling
 convention. The frozen bootstrap convention is shown below. It is versioned in
-[MIGA Lua Native ABI 0.4](./MIGA-Lua-native-ABI-v0.md); extensions still need
+[MIGA Lua Native ABI 0.6](./MIGA-Lua-native-ABI-v0.md); extensions still need
 measurement and an explicit compatible revision or version bump.
 
 | Resource | Proposed use |
@@ -162,14 +162,14 @@ measurement and an explicit compatible revision or version bump.
 | `A6` | Optional frame pointer; omit in leaf functions when possible |
 | `A7` | Stack pointer |
 
-ABI 0.4 adds immutable `string` descriptors and interned `symbol` IDs to the
-canonical 32-bit `bool`/integer register and slot contract. It retains
+ABI 0.6 includes signed Q16.16 `fix`, explicit `i32`/`fix` conversions,
+immutable `string` descriptors, and interned
+`symbol` IDs to the canonical 32-bit `bool`/integer register and slot contract. It retains
 per-width wrapping, four-byte stack alignment, register-only bootstrap
 arguments, frames of at most 32,768 bytes, and the first runtime-context entry
 for a non-returning controlled fault handler. The following extensions remain
 later decisions:
 
-- fixed-point representation and rounding rules;
 - array descriptor layout and mutable storage;
 - multiple return values, if supported;
 - additional error and trap conventions;
@@ -569,8 +569,9 @@ circular disassembly trace for failures. Run it with `gmake miga68k-test`.
 ### Phase 1 — connect the compiler
 
 **Initial connection implemented:** `miga80c` parses one explicitly annotated
-`i8`/`u8`/`i16`/`u16`/`i32`/`bool` function with typed local declarations,
-assignments, signed/unsigned comparisons and division, statement-only `/=`,
+`i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`string`/`symbol` function with typed local declarations,
+assignments, signed/unsigned comparisons, integer division, Q16.16
+multiplication/division, explicit `fix(i32)`/`i32(fix)`, statement-only `/=`,
 nested `if`/`else`, and nested `while`,
 lowers it to typed stack IR and value IR, renders GNU
 m68k assembly at `-O0` or `-O1`, and provides a host CFG evaluator. The IR has
@@ -584,11 +585,14 @@ bounded cycle-breaking temporary. The ordinary test path assembles both levels
 for seven corpora and checks six inputs per corpus against Musashi. A
 signed-division corpus adds twelve normal executions and four controlled
 faults. An exact-width corpus adds twelve normal executions and two controlled
-faults. A synthetic value-IR fixture forces three reusable
+faults. Fixed-point multiplication, division, immutable-value, and explicit
+conversion corpora cover their dedicated semantics and faults. A synthetic
+value-IR fixture forces three reusable
 spill slots in an `A6` frame and checks six more inputs, saved registers, stack
 balance, and maximum stack use. Host and 68020 test programs must render
 ordinary, local-heavy, conditional, loop, loop-control, division, exact-width,
-and spilling assembly byte-identically.
+immutable-value, fixed-point, fixed-division, conversion, and spilling
+assembly byte-identically.
 The current GNU toolchain
 retains an Amiga relocatable object; ELF linking, symbol manifests, and broader
 language semantics remain pending. See
@@ -609,21 +613,23 @@ caller/callee-saved sets, `A5` context ownership, `A6` frames, Boolean values,
 and four-byte stack alignment. ABI 0.2 assigns runtime-context offset zero to a
 non-returning controlled fault handler and passes fault code/source location in
 `D0-D2`. ABI 0.3 defined canonical register/slot values and wrapping semantics
-for `i8`, `u8`, `i16`, and `u16`. ABI 0.4 adds canonical immutable-string
-pointers in the address class and interned symbol IDs in the scalar class. The
+for `i8`, `u8`, `i16`, and `u16`. ABI 0.4 added canonical immutable-string
+pointers in the address class and interned symbol IDs in the scalar class.
+ABI 0.5 added signed Q16.16 values in the scalar class. ABI 0.6 defines
+explicit `fix(i32)`/`i32(fix)` semantics and controlled range-fault code 2. The
 backend consumes the machine-readable contract and the Musashi runner derives
 its saved-register checks from it, including a deliberate clobber negative
 control. See
-[MIGA Lua Native ABI 0.4](./MIGA-Lua-native-ABI-v0.md).
+[MIGA Lua Native ABI 0.6](./MIGA-Lua-native-ABI-v0.md).
 
-- define register roles; **implemented for ABI 0.4**
+- define register roles; **implemented for ABI 0.6**
 - add calls and source locals; **typed source locals, assignments, and
   compiler-generated spill frames implemented; calls pending**
 - implement saved-register and stack guard checks; **implemented for the current
   entry path; nested calls remain pending**
-- define runtime traps; **division by zero implemented as controlled fault 1;
-  other traps pending**
-- publish the ABI as a versioned document; **implemented for ABI 0.4**
+- define runtime traps; **division by zero is controlled fault 1 and numeric
+  conversion out of range is controlled fault 2; other traps pending**
+- publish the ABI as a versioned document; **implemented for ABI 0.6**
 
 **Exit condition:** separately compiled generated functions and runtime stubs can call one another reliably.
 
@@ -637,10 +643,15 @@ control. See
   **implemented with constant rejection and source-located runtime faults**
 - `i8`, `u8`, `i16`, and `u16` arithmetic, comparisons, division, constant-fit
   conversion, and canonical ABI values; **implemented at `-O0` and `-O1`**
-- fixed-point arithmetic;
+- signed Q16.16 literals, addition/subtraction/negation, multiplication, and
+  comparisons; **implemented with bit-exact host/68020 rounding**
+- signed Q16.16 division and statement-only `/=`; **implemented with
+  truncation toward zero, wrapping quotients, and controlled zero faults**
+- explicit `fix(i32)` and `i32(fix)`; **implemented with constant folding,
+  checked integer range, truncation toward zero, and controlled fault 2**
 - globals and arrays;
 - immutable string pool, `string` descriptors, and interned `symbol` IDs;
-  **implemented for the bounded single-function compiler and ABI 0.4;
+  **implemented for the bounded single-function compiler and ABI 0.6;
   cartridge-wide multi-function pool merging remains pending**
 - bounds and error behaviour;
 - randomized differential tests.
@@ -651,8 +662,11 @@ control. See
 executed instructions, and maximum callee stack bytes. The differential suite
 locks reviewed `-O0`/`-O1` figures for seven ordinary source corpora, including
 nested conditional control flow, cyclic loop transfers, and multi-site loop-control
-funnels, plus signed division, exact-width integers, immutable values, and a
-forced spill fixture: 124 Musashi executions in total. These are optimizer regressions only, not
+funnels, plus signed division, exact-width integers, immutable values,
+fixed-point arithmetic, fixed division, explicit conversions, and a forced
+spill fixture: 168
+Musashi executions in
+total. These are optimizer regressions only, not
 cycle or wall-time claims. In the conditional corpus,
 CFG-aware allocation reduces the `-O1` result to 356 code bytes, 60-62 executed
 instructions, and 24 maximum callee stack bytes; six live `phi` values share
@@ -672,6 +686,17 @@ The exact-width image falls from 472 bytes at O0 to 220 bytes at O1. Across its
 normal paths O1 executes 32-34 instructions instead of 107-110 and uses 20
 bytes of callee stack instead of 44; its unsigned zero-divisor path retains its
 source location.
+
+The fixed-point image falls from 196 bytes, 57-58 instructions, and 28 stack
+bytes at O0 to 104 bytes, 25-26 instructions, and 16 stack bytes at O1. This
+includes preserving `D7` around the native 64-bit product. The fixed-division
+image falls from 300 bytes and 95-101 normal-path instructions to 164 bytes
+and 51-55 instructions; O1 uses at most 16 stack bytes and preserves `D6-D7`.
+The conversion image falls from 208 bytes and 40-50 normal-path instructions
+to 112 bytes and 22-26 instructions; checked-fault paths fall from 15 to 11
+instructions and retain their source location. The `-Os` 68020/libnix compiler
+is 70,872 linked bytes (70,472 text, 280 data, 120 BSS), an increase of 3,612
+text bytes over the fixed-division tranche.
 
 - record code size, instruction counts, and stack use; **implemented for the bootstrap**
 - add core-cycle estimates;

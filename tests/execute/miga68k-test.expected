@@ -1,1 +1,1 @@
-PASS  miga68k-test Musashi 68EC020 mul_add (5 cases; 3 guard cases; ABI 0.4)
+PASS  miga68k-test Musashi 68EC020 mul_add (5 cases; 3 guard cases; ABI 0.6)

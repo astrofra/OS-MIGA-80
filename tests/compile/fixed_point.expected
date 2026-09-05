@@ -1,0 +1,10 @@
+PASS  generated-o0/exact D0=fffb8000 instructions=58 code_bytes=196 stack_bytes=28
+PASS  generated-o0/negative_round D0=fffe8148 instructions=58 code_bytes=196 stack_bytes=28
+PASS  generated-o0/mixed_sign D0=0001f000 instructions=57 code_bytes=196 stack_bytes=28
+PASS  generated-o0/wrap D0=0ace8000 instructions=58 code_bytes=196 stack_bytes=28
+PASS  generated-o1/exact D0=fffb8000 instructions=26 code_bytes=104 stack_bytes=16
+PASS  generated-o1/negative_round D0=fffe8148 instructions=26 code_bytes=104 stack_bytes=16
+PASS  generated-o1/mixed_sign D0=0001f000 instructions=25 code_bytes=104 stack_bytes=16
+PASS  generated-o1/wrap D0=0ace8000 instructions=26 code_bytes=104 stack_bytes=16
+PASS  compiler Q16.16 fixed point matches typed-IR oracle (8 cases)
+PASS  compiler O1 fixed-point code size reduced from 196 to 104 bytes

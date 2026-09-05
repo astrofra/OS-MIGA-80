@@ -95,6 +95,9 @@ static int parse_typed_argument(const struct miga80_ir_function *function,
             return 1;
         }
     }
+    if (type == MIGA80_TYPE_FIX) {
+        return miga80_parse_fix_literal(text, strlen(text), value);
+    }
     if (type != MIGA80_TYPE_STRING && type != MIGA80_TYPE_SYMBOL) {
         return parse_argument(text, value);
     }

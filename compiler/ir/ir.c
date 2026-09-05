@@ -52,6 +52,10 @@ static int lower_node(const struct miga80_ast_function *ast, int node_index,
         return emit_instruction(ir, MIGA80_IR_PUSH_I32, node->type,
                                 node->value,
                                 node->line, node->column, diagnostic);
+    case MIGA80_AST_LITERAL_FIX:
+        return emit_instruction(ir, MIGA80_IR_PUSH_FIX, MIGA80_TYPE_FIX,
+                                node->value,
+                                node->line, node->column, diagnostic);
     case MIGA80_AST_LITERAL_BOOL:
         return emit_instruction(ir, MIGA80_IR_PUSH_BOOL, MIGA80_TYPE_BOOL,
                                 node->value,
@@ -92,6 +96,20 @@ static int lower_node(const struct miga80_ast_function *ast, int node_index,
         }
         return emit_instruction(ir, MIGA80_IR_NEG_I32, node->type, 0U,
                                 node->line, node->column, diagnostic);
+    case MIGA80_AST_FIX_FROM_I32:
+        if (!lower_node(ast, node->left, ir, diagnostic)) {
+            return 0;
+        }
+        return emit_instruction(ir, MIGA80_IR_FIX_FROM_I32,
+                                MIGA80_TYPE_FIX, 0U, node->line,
+                                node->column, diagnostic);
+    case MIGA80_AST_I32_FROM_FIX:
+        if (!lower_node(ast, node->left, ir, diagnostic)) {
+            return 0;
+        }
+        return emit_instruction(ir, MIGA80_IR_I32_FROM_FIX,
+                                MIGA80_TYPE_I32, 0U, node->line,
+                                node->column, diagnostic);
     case MIGA80_AST_ADD_I32:
         opcode = MIGA80_IR_ADD_I32;
         break;
@@ -100,6 +118,12 @@ static int lower_node(const struct miga80_ast_function *ast, int node_index,
         break;
     case MIGA80_AST_MUL_I32:
         opcode = MIGA80_IR_MUL_I32;
+        break;
+    case MIGA80_AST_MUL_FIX:
+        opcode = MIGA80_IR_MUL_FIX;
+        break;
+    case MIGA80_AST_DIV_FIX:
+        opcode = MIGA80_IR_DIV_FIX;
         break;
     case MIGA80_AST_DIV_I32:
         opcode = MIGA80_IR_DIV_I32;
@@ -699,6 +723,7 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                         "typed IR terminator is not last in block");
         }
         if (instruction->opcode == MIGA80_IR_PUSH_I32 ||
+            instruction->opcode == MIGA80_IR_PUSH_FIX ||
             instruction->opcode == MIGA80_IR_PUSH_BOOL ||
             instruction->opcode == MIGA80_IR_PUSH_STRING ||
             instruction->opcode == MIGA80_IR_PUSH_SYMBOL ||
@@ -734,6 +759,8 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                 (instruction->opcode == MIGA80_IR_PUSH_I32 &&
                  !miga80_integer_value_is_canonical(type,
                                                      instruction->operand)) ||
+                (instruction->opcode == MIGA80_IR_PUSH_FIX &&
+                 type != MIGA80_TYPE_FIX) ||
                 ((string_literal || symbol_literal) &&
                  (instruction->operand >= ir->pool.entry_count ||
                   ir->pool.entries[instruction->operand].type != type)) ||
@@ -768,7 +795,7 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             stack_size = 0U;
         } else if (instruction->opcode == MIGA80_IR_NEG_I32) {
             if (stack_size < 1U ||
-                !miga80_type_is_signed_integer(instruction->type) ||
+                !miga80_type_is_signed_numeric(instruction->type) ||
                 stack[stack_size - 1U] != instruction->type) {
                 return fail(diagnostic, instruction->line,
                             instruction->column,
@@ -783,9 +810,27 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                             "typed IR constant conversion has invalid type");
             }
             stack[stack_size - 1U] = instruction->type;
+        } else if (instruction->opcode == MIGA80_IR_FIX_FROM_I32) {
+            if (stack_size < 1U || instruction->type != MIGA80_TYPE_FIX ||
+                stack[stack_size - 1U] != MIGA80_TYPE_I32) {
+                return fail(diagnostic, instruction->line,
+                            instruction->column,
+                            "typed IR i32-to-fix conversion is invalid");
+            }
+            stack[stack_size - 1U] = MIGA80_TYPE_FIX;
+        } else if (instruction->opcode == MIGA80_IR_I32_FROM_FIX) {
+            if (stack_size < 1U || instruction->type != MIGA80_TYPE_I32 ||
+                stack[stack_size - 1U] != MIGA80_TYPE_FIX) {
+                return fail(diagnostic, instruction->line,
+                            instruction->column,
+                            "typed IR fix-to-i32 conversion is invalid");
+            }
+            stack[stack_size - 1U] = MIGA80_TYPE_I32;
         } else if (instruction->opcode == MIGA80_IR_ADD_I32 ||
                    instruction->opcode == MIGA80_IR_SUB_I32 ||
                    instruction->opcode == MIGA80_IR_MUL_I32 ||
+                   instruction->opcode == MIGA80_IR_MUL_FIX ||
+                   instruction->opcode == MIGA80_IR_DIV_FIX ||
                    instruction->opcode == MIGA80_IR_DIV_I32 ||
                    instruction->opcode == MIGA80_IR_DIV_U32 ||
                    instruction->opcode == MIGA80_IR_EQ_I32 ||
@@ -808,10 +853,13 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             const int bool_comparison =
                 instruction->opcode == MIGA80_IR_EQ_BOOL ||
                 instruction->opcode == MIGA80_IR_NE_BOOL;
-            const int signed_operation =
-                instruction->opcode == MIGA80_IR_DIV_I32 ||
-                (instruction->opcode >= MIGA80_IR_LT_I32 &&
-                 instruction->opcode <= MIGA80_IR_GE_I32);
+            const int signed_division =
+                instruction->opcode == MIGA80_IR_DIV_I32;
+            const int fix_division =
+                instruction->opcode == MIGA80_IR_DIV_FIX;
+            const int signed_comparison =
+                instruction->opcode >= MIGA80_IR_LT_I32 &&
+                instruction->opcode <= MIGA80_IR_GE_I32;
             const int unsigned_operation =
                 instruction->opcode == MIGA80_IR_DIV_U32 ||
                 (instruction->opcode >= MIGA80_IR_LT_U32 &&
@@ -821,17 +869,27 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             const int nonbool_equality =
                 instruction->opcode == MIGA80_IR_EQ_I32 ||
                 instruction->opcode == MIGA80_IR_NE_I32;
+            const int add_or_sub =
+                instruction->opcode == MIGA80_IR_ADD_I32 ||
+                instruction->opcode == MIGA80_IR_SUB_I32;
 
             if ((bool_comparison && operand_type != MIGA80_TYPE_BOOL) ||
                 (nonbool_equality &&
                  (operand_type == MIGA80_TYPE_BOOL ||
                   !miga80_type_is_value(operand_type))) ||
-                (!bool_comparison && !nonbool_equality &&
+                (add_or_sub && !miga80_type_is_numeric(operand_type)) ||
+                (instruction->opcode == MIGA80_IR_MUL_I32 &&
                  !miga80_type_is_integer(operand_type)) ||
-                (signed_operation &&
+                (instruction->opcode == MIGA80_IR_MUL_FIX &&
+                 operand_type != MIGA80_TYPE_FIX) ||
+                (fix_division && operand_type != MIGA80_TYPE_FIX) ||
+                (signed_division &&
                  !miga80_type_is_signed_integer(operand_type)) ||
+                (signed_comparison &&
+                 !miga80_type_is_signed_numeric(operand_type)) ||
                 (unsigned_operation &&
-                 miga80_type_is_signed_integer(operand_type)) ||
+                 (!miga80_type_is_integer(operand_type) ||
+                  miga80_type_is_signed_integer(operand_type))) ||
                 stack_size < 2U || stack[stack_size - 1U] != operand_type ||
                 stack[stack_size - 2U] != operand_type) {
                 return fail(diagnostic, instruction->line,
@@ -1085,6 +1143,7 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
 
             switch (instruction->opcode) {
             case MIGA80_IR_PUSH_I32:
+            case MIGA80_IR_PUSH_FIX:
             case MIGA80_IR_PUSH_BOOL:
                 stack[stack_size++] = instruction->operand;
                 break;
@@ -1121,9 +1180,24 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
                 stack[stack_size - 1U] = miga80_normalize_integer(
                     instruction->type, stack[stack_size - 1U]);
                 break;
+            case MIGA80_IR_FIX_FROM_I32:
+                if (!miga80_convert_i32_to_fix(
+                        stack[stack_size - 1U],
+                        &stack[stack_size - 1U])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column,
+                                "conversion out of range");
+                }
+                break;
+            case MIGA80_IR_I32_FROM_FIX:
+                stack[stack_size - 1U] = miga80_convert_fix_to_i32(
+                    stack[stack_size - 1U]);
+                break;
             case MIGA80_IR_ADD_I32:
             case MIGA80_IR_SUB_I32:
             case MIGA80_IR_MUL_I32:
+            case MIGA80_IR_MUL_FIX:
+            case MIGA80_IR_DIV_FIX:
             case MIGA80_IR_DIV_I32:
             case MIGA80_IR_DIV_U32:
             case MIGA80_IR_EQ_I32:
@@ -1149,6 +1223,16 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
                 } else if (instruction->opcode == MIGA80_IR_MUL_I32) {
                     stack[stack_size - 1U] = miga80_normalize_integer(
                         instruction->type, left * right);
+                } else if (instruction->opcode == MIGA80_IR_MUL_FIX) {
+                    stack[stack_size - 1U] =
+                        miga80_multiply_fix(left, right);
+                } else if (instruction->opcode == MIGA80_IR_DIV_FIX) {
+                    if (!miga80_divide_fix(left, right,
+                                           &stack[stack_size - 1U])) {
+                        return fail(diagnostic, instruction->line,
+                                    instruction->column,
+                                    "division by zero");
+                    }
                 } else if (instruction->opcode == MIGA80_IR_DIV_I32) {
                     if (!miga80_divide_i32(left, right,
                                            &stack[stack_size - 1U])) {

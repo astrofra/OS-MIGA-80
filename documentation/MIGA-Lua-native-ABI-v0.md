@@ -1,13 +1,16 @@
-# MIGA Lua Native ABI 0.4
+# MIGA Lua Native ABI 0.6
 
-**Status:** frozen bootstrap exact-width scalar, immutable string/symbol,
-register, stack, and controlled-fault core
+**Status:** frozen bootstrap exact-width scalar, signed Q16.16 fixed point,
+explicit fixed/integer conversion, immutable string/symbol, register, stack,
+and controlled-fault core
 
 This is the private calling convention between generated MIGA Lua functions
 and the trusted MIGA-80 runtime. It is not the Amiga C ABI, an AmigaOS ABI, or
-part of the source-cartridge format. Version 0.4 freezes the rules needed by
-the compiler bootstrap, exact-width integer normalization, immutable literal
-pool, register allocator, and first source-located runtime fault.
+part of the source-cartridge format. Version 0.6 freezes the rules needed by
+the compiler bootstrap, exact-width integer normalization, fixed-point
+representation and arithmetic, immutable literal pool, register allocator,
+and source-located numeric runtime faults. It retains the ABI 0.5 calling
+convention and adds the checked `i32`-to-`fix` conversion fault.
 
 ## Target and value representation
 
@@ -19,6 +22,25 @@ pool, register allocator, and first source-located runtime fault.
   invalid on function entry and may not cross a generated call boundary.
 - Ordinary integer arithmetic wraps modulo 2^8, 2^16, or 2^32 according to the
   declared type, then restores that canonical sign/zero extension.
+- `fix` is a signed two's-complement Q16.16 scalar in one 32-bit data register
+  or four-byte scalar slot. Its exact range is -32768 through
+  32767 + 65535/65536. Every 32-bit pattern is a canonical `fix` value.
+- `fix` addition, subtraction, and negation wrap modulo 2^32. Multiplication
+  forms the exact signed 64-bit product, takes bits 16 through 47 (equivalent
+  to division by 65536 rounded toward negative infinity), and then keeps the
+  low 32 bits. This deliberately matches the compact 68020
+  `MULS.L`/word-extraction sequence and is identical in the host oracle.
+- `fix` division computes the signed mathematical quotient
+  `(dividend * 65536) / divisor`, truncates it toward zero, and keeps its low
+  32 bits. The native sequence divides unsigned magnitudes in two bounded
+  steps so even a quotient outside signed or unsigned 32-bit range has the
+  specified wrapping result. A zero divisor is a controlled fault.
+- `fix(i32)` is explicit and exact only for integer inputs from -32768 through
+  32767 inclusive. It shifts the canonical 32-bit input left by 16. A
+  provably out-of-range constant is rejected; a dynamic out-of-range value is
+  controlled fault 2.
+- `i32(fix)` is explicit, truncates toward zero, and always fits because the
+  integral part of Q16.16 is in the `i32` range. Neither direction is implicit.
 - Signed integer division truncates toward zero. A type's minimum value divided
   by `-1` wraps to that minimum value. Unsigned types use unsigned division;
   division by zero is a controlled fault for both forms.
@@ -39,7 +61,7 @@ will receive its own versioned contract.
 
 ## Register contract
 
-| Register | ABI 0.4 role | Preservation |
+| Register | ABI 0.6 role | Preservation |
 |---|---|---|
 | `D0-D2` | First three scalar arguments; `D0` scalar result | Caller-saved |
 | `D3-D7` | Allocatable scalar values | Callee-saved |
@@ -51,16 +73,16 @@ will receive its own versioned contract.
 
 Arguments are assigned from left to right within their type class. Mixed
 scalar/address signatures therefore advance the two register sequences
-independently. `i8`, `u8`, `i16`, `u16`, `i32`, `bool`, and `symbol` use the
+independently. `i8`, `u8`, `i16`, `u16`, `i32`, `fix`, `bool`, and `symbol` use the
 scalar class; `string` uses the address class. A signature may therefore have
 at most three scalar and two address parameters in any source order.
-There are no stack arguments in ABI 0.4. A signature that exhausts either
+There are no stack arguments in ABI 0.6. A signature that exhausts either
 register class must be rejected until a later ABI version defines aggregates
 and stack argument placement.
 
 Generated code preserves `A5` and may read its first long word at offset zero,
 which ABI 0.2 introduced as the non-null controlled-fault handler address.
-ABI 0.4 retains it unchanged. Remaining
+ABI 0.6 retains it unchanged. Remaining
 runtime-context fields and the service jump table require later versioned
 extensions. Addresses used by the Musashi harness are test configuration and
 are not ABI constants.
@@ -73,7 +95,7 @@ are not ABI constants.
 - On entry, `(A7)` is the return PC. A framed function uses
   `link.w A6,#-frame_size`; saved `A6` is then at `0(A6)` and the return PC at
   `4(A6)`.
-- Frame size is a multiple of four and at most 32,768 bytes in ABI 0.4. Locals
+- Frame size is a multiple of four and at most 32,768 bytes in ABI 0.6. Locals
   and spills use negative offsets from `A6`.
 - A leaf may omit the frame and leave `A6` untouched.
 - Before `RTS`, a function restores every callee-saved register and restores
@@ -103,17 +125,28 @@ fault handler. Generated code enters it with:
 
 | Register | Fault input |
 |---|---|
-| `D0` | Stable fault code; `1` means integer division by zero |
+| `D0` | Stable fault code, defined below |
 | `D1` | One-based source line |
 | `D2` | One-based source column |
 | `A0` | Scratch register holding the handler address |
 
-A function with a dynamic divisor tests it before `DIVS.L` or `DIVU.L`. Its cold fault
-site loads `D1` and `D2`, joins a shared function-local tail that loads `D0`,
+The defined ABI 0.6 fault codes are:
+
+| Code | Meaning |
+|---:|---|
+| `1` | Numeric division by zero |
+| `2` | Explicit numeric conversion out of range |
+
+A function with a dynamic divisor tests it before the selected integer or
+fixed-point division sequence. Its cold fault site loads `D1` and `D2`, joins
+a shared function-local tail that loads `D0`,
 then performs `movea.l 0(A5),A0` and `jmp (A0)`. It never relies on the CPU's
 native divide-by-zero exception. A divisor proven to be a nonzero constant has
 no guard or fault site; a divisor proven to be zero is rejected by the
-compiler.
+compiler. A `fix(i32)` not otherwise proven safe similarly uses a biased
+unsigned range check before shifting; each failing site passes its source
+location to a shared function-local conversion-fault tail. A constant outside
+the accepted range is rejected during compilation. `i32(fix)` cannot fault.
 
 The handler does not return through the generated function's active frame. The
 shipping runtime trampoline will restore its saved host stack and transfer
@@ -153,7 +186,7 @@ part of the runtime value.
 Source literals accept single or double quotes and the escapes `\\`, `\'`,
 `\"`, `\n`, `\r`, `\t`, `\0`, and `\xNN`. `symbol("name")` is the explicit
 compile-time constructor. There is no implicit or explicit runtime conversion
-between `string` and `symbol` in ABI 0.4.
+between `string` and `symbol` in ABI 0.6.
 
 The current bounded compiler arena permits at most 32 deduplicated entries and
 1,024 decoded payload bytes per function. Those are bootstrap compiler limits,
@@ -194,6 +227,18 @@ The immutable-value corpus verifies decoded-literal deduplication, `string` and
 `symbol` joins, pointer/ID equality, PC-relative pool loads with no object
 relocations, and both paths under Musashi at `-O0` and `-O1`. Mixed signatures
 and an address result are additionally checked in the host backend tests.
+The fixed-point corpus verifies exact and non-exact decimal inputs, negative
+multiplication rounding, wrapping, CFG joins, `D7` preservation in O1, and
+the same raw Q16.16 results from the typed-IR oracle and both generated images.
+The fixed-division corpus additionally verifies truncation toward zero for all
+sign combinations, quotient wrapping beyond 32 bits, statement-only `/=`,
+`D6-D7` preservation, and two source-located zero-divisor faults at both
+optimization levels.
+The explicit-conversion corpus verifies `fix(i32)` at both inclusive bounds,
+positive and negative `i32(fix)` truncation toward zero, constant folding,
+and two source-located out-of-range faults at both optimization levels. The
+optimizer retains a checked conversion whose result is overwritten because
+the fault remains observable.
 
 Run the host contract and generated-code checks with:
 

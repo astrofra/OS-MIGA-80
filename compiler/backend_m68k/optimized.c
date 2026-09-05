@@ -10,6 +10,11 @@
 #define MIGA80_DATA_REGISTER_COUNT 8U
 #define MIGA80_SPILL_REGISTER_COUNT 7U
 #define MIGA80_SPILL_SCRATCH_REGISTER 7
+#define MIGA80_FIX_REGISTER_COUNT 6U
+#define MIGA80_FIX_LOW_SCRATCH_REGISTER 6
+#define MIGA80_FIX_DIV_REGISTER_COUNT 5U
+#define MIGA80_FIX_DIV_LOW_SCRATCH_REGISTER 5
+#define MIGA80_FIX_DIVISOR_SCRATCH_REGISTER 6
 #define MIGA80_NO_REGISTER (-1)
 #define MIGA80_NO_SPILL_SLOT UINT_MAX
 #define MIGA80_LIVE_WORD_BITS 32U
@@ -66,7 +71,11 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
 {
     return opcode == MIGA80_VALUE_NEG || opcode == MIGA80_VALUE_ADD ||
            opcode == MIGA80_VALUE_SUB || opcode == MIGA80_VALUE_MUL ||
+           opcode == MIGA80_VALUE_MUL_FIX ||
+           opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV || opcode == MIGA80_VALUE_DIV_U ||
+           opcode == MIGA80_VALUE_FIX_FROM_I32 ||
+           opcode == MIGA80_VALUE_I32_FROM_FIX ||
            opcode == MIGA80_VALUE_NORMALIZE_INTEGER ||
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
@@ -77,7 +86,9 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
 static int opcode_has_right(enum miga80_value_opcode opcode)
 {
     return opcode == MIGA80_VALUE_ADD || opcode == MIGA80_VALUE_SUB ||
-           opcode == MIGA80_VALUE_MUL || opcode == MIGA80_VALUE_DIV ||
+           opcode == MIGA80_VALUE_MUL ||
+           opcode == MIGA80_VALUE_MUL_FIX || opcode == MIGA80_VALUE_DIV ||
+           opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV_U ||
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
@@ -88,6 +99,7 @@ static int opcode_has_right(enum miga80_value_opcode opcode)
 static int opcode_is_commutative(enum miga80_value_opcode opcode)
 {
     return opcode == MIGA80_VALUE_ADD || opcode == MIGA80_VALUE_MUL ||
+           opcode == MIGA80_VALUE_MUL_FIX ||
            opcode == MIGA80_VALUE_EQ || opcode == MIGA80_VALUE_NE;
 }
 
@@ -212,7 +224,7 @@ static int validate_value_function(
                         "invalid O1 value operand");
         }
         if (value->opcode == MIGA80_VALUE_NEG &&
-            (!miga80_type_is_signed_integer(value->type) ||
+            (!miga80_type_is_signed_numeric(value->type) ||
              function->values[value->left].type != value->type)) {
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 integer negation");
@@ -223,9 +235,23 @@ static int validate_value_function(
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 constant conversion");
         }
+        if (value->opcode == MIGA80_VALUE_FIX_FROM_I32 &&
+            (value->type != MIGA80_TYPE_FIX ||
+             function->values[value->left].type != MIGA80_TYPE_I32)) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 i32-to-fix conversion");
+        }
+        if (value->opcode == MIGA80_VALUE_I32_FROM_FIX &&
+            (value->type != MIGA80_TYPE_I32 ||
+             function->values[value->left].type != MIGA80_TYPE_FIX)) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 fix-to-i32 conversion");
+        }
         if ((value->opcode == MIGA80_VALUE_ADD ||
              value->opcode == MIGA80_VALUE_SUB ||
              value->opcode == MIGA80_VALUE_MUL ||
+             value->opcode == MIGA80_VALUE_MUL_FIX ||
+             value->opcode == MIGA80_VALUE_DIV_FIX ||
              value->opcode == MIGA80_VALUE_DIV ||
              value->opcode == MIGA80_VALUE_DIV_U ||
              opcode_is_comparison(value->opcode)) &&
@@ -238,11 +264,25 @@ static int validate_value_function(
                         "invalid O1 binary value type");
         }
         if ((value->opcode == MIGA80_VALUE_ADD ||
-             value->opcode == MIGA80_VALUE_SUB ||
-             value->opcode == MIGA80_VALUE_MUL) &&
+             value->opcode == MIGA80_VALUE_SUB) &&
+            !miga80_type_is_numeric(value->type)) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 numeric arithmetic");
+        }
+        if (value->opcode == MIGA80_VALUE_MUL &&
             !miga80_type_is_integer(value->type)) {
             return fail(diagnostic, value->line, value->column,
-                        "invalid O1 integer arithmetic");
+                        "invalid O1 integer multiplication");
+        }
+        if (value->opcode == MIGA80_VALUE_MUL_FIX &&
+            value->type != MIGA80_TYPE_FIX) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 fix multiplication");
+        }
+        if (value->opcode == MIGA80_VALUE_DIV_FIX &&
+            value->type != MIGA80_TYPE_FIX) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 fix division");
         }
         if (value->opcode == MIGA80_VALUE_DIV &&
             !miga80_type_is_signed_integer(value->type)) {
@@ -257,7 +297,7 @@ static int validate_value_function(
         }
         if (value->opcode >= MIGA80_VALUE_LT_I32 &&
             value->opcode <= MIGA80_VALUE_GE_I32 &&
-            !miga80_type_is_signed_integer(
+            !miga80_type_is_signed_numeric(
                 function->values[value->left].type)) {
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 signed comparison");
@@ -1193,6 +1233,130 @@ static int emit_multiply(FILE *output,
                                 destination);
 }
 
+static int emit_fix_multiply(
+    FILE *output, const struct miga80_value_function *function,
+    const struct allocation_plan *plan, unsigned int source,
+    int destination)
+{
+    const struct miga80_value_instruction *operand =
+        &function->values[source];
+    int multiplied;
+
+    if (operand->opcode == MIGA80_VALUE_CONSTANT) {
+        multiplied = output_line(
+            output, "        muls.l  #0x%08x,%%d7:%s\n",
+            (unsigned int)operand->immediate,
+            data_register_name(destination));
+    } else if (plan->registers[source] != MIGA80_NO_REGISTER) {
+        multiplied = output_line(
+            output, "        muls.l  %s,%%d7:%s\n",
+            data_register_name(plan->registers[source]),
+            data_register_name(destination));
+    } else if (plan->spill_slots[source] != MIGA80_NO_SPILL_SLOT) {
+        multiplied = output_line(
+            output, "        muls.l  -%u(%%a6),%%d7:%s\n",
+            spill_offset(plan, source), data_register_name(destination));
+    } else {
+        return 0;
+    }
+    return multiplied &&
+           output_line(output,
+                       "        move.w  %%d7,%s\n"
+                       "        swap    %s\n",
+                       data_register_name(destination),
+                       data_register_name(destination));
+}
+
+static int emit_fix_division(
+    FILE *output, const struct miga80_value_function *function,
+    unsigned int value_index, int dynamic_divisor, int destination)
+{
+    if (dynamic_divisor &&
+        (!output_line(output, "        tst.l   %%d6\n") ||
+         !output_line(output, "        beq     .L_%s_divzero_%u\n",
+                      function->name, value_index))) {
+        return 0;
+    }
+    return output_line(
+        output,
+        "        move.l  %s,%%d7\n"
+        "        eor.l   %%d6,%%d7\n"
+        "        move.l  %%d7,-(%%a7)\n"
+        "        tst.l   %s\n"
+        "        bpl     .L_%s_fixdiv_left_%u\n"
+        "        neg.l   %s\n"
+        ".L_%s_fixdiv_left_%u:\n"
+        "        tst.l   %%d6\n"
+        "        bpl     .L_%s_fixdiv_right_%u\n"
+        "        neg.l   %%d6\n"
+        ".L_%s_fixdiv_right_%u:\n"
+        "        move.l  %s,%%d7\n"
+        "        lsr.l   #8,%%d7\n"
+        "        lsr.l   #8,%%d7\n"
+        "        swap    %s\n"
+        "        clr.w   %s\n"
+        "        move.l  %s,-(%%a7)\n"
+        "        move.l  %%d7,%s\n"
+        "        moveq   #0,%%d7\n"
+        "        divul.l %%d6,%%d7:%s\n"
+        "        move.l  (%%a7)+,%s\n"
+        "        divu.l  %%d6,%%d7:%s\n"
+        "        move.l  (%%a7)+,%%d7\n"
+        "        tst.l   %%d7\n"
+        "        bpl     .L_%s_fixdiv_done_%u\n"
+        "        neg.l   %s\n"
+        ".L_%s_fixdiv_done_%u:\n",
+        data_register_name(destination), data_register_name(destination),
+        function->name, value_index, data_register_name(destination),
+        function->name, value_index, function->name, value_index,
+        function->name, value_index, data_register_name(destination),
+        data_register_name(destination), data_register_name(destination),
+        data_register_name(destination), data_register_name(destination),
+        data_register_name(destination), data_register_name(destination),
+        data_register_name(destination), function->name, value_index,
+        data_register_name(destination), function->name, value_index);
+}
+
+static int emit_i32_to_fix(FILE *output,
+                           const struct miga80_value_function *function,
+                           unsigned int value_index, int destination,
+                           int range_guard)
+{
+    if (range_guard &&
+        !output_line(output,
+                     "        add.l   #0x00008000,%s\n"
+                     "        cmp.l   #0x00010000,%s\n"
+                     "        bcc     .L_%s_conversion_%u\n"
+                     "        sub.l   #0x00008000,%s\n",
+                     data_register_name(destination),
+                     data_register_name(destination), function->name,
+                     value_index, data_register_name(destination))) {
+        return 0;
+    }
+    return output_line(output,
+                       "        swap    %s\n"
+                       "        clr.w   %s\n",
+                       data_register_name(destination),
+                       data_register_name(destination));
+}
+
+static int emit_fix_to_i32(FILE *output,
+                           const struct miga80_value_function *function,
+                           unsigned int value_index, int destination)
+{
+    return output_line(
+        output,
+        "        tst.l   %s\n"
+        "        bpl     .L_%s_fix_to_i32_positive_%u\n"
+        "        add.l   #0x0000ffff,%s\n"
+        ".L_%s_fix_to_i32_positive_%u:\n"
+        "        swap    %s\n"
+        "        ext.l   %s\n",
+        data_register_name(destination), function->name, value_index,
+        data_register_name(destination), function->name, value_index,
+        data_register_name(destination), data_register_name(destination));
+}
+
 static int emit_division(FILE *output,
                          const struct miga80_value_function *function,
                          const struct allocation_plan *plan,
@@ -1324,6 +1488,65 @@ static int emit_value(FILE *output,
                store_spilled_result(output, plan, index, destination);
     }
 
+    if (value->opcode == MIGA80_VALUE_FIX_FROM_I32) {
+        emitted = emit_move(output, function, plan, value->left,
+                            destination) &&
+                  emit_i32_to_fix(
+                      output, function, index, destination,
+                      function->values[value->left].opcode !=
+                          MIGA80_VALUE_I32_FROM_FIX);
+        return emitted &&
+               store_spilled_result(output, plan, index, destination);
+    }
+
+    if (value->opcode == MIGA80_VALUE_I32_FROM_FIX) {
+        emitted = emit_move(output, function, plan, value->left,
+                            destination) &&
+                  emit_fix_to_i32(output, function, index, destination);
+        return emitted &&
+               store_spilled_result(output, plan, index, destination);
+    }
+
+    if (value->opcode == MIGA80_VALUE_MUL_FIX) {
+        const int fix_destination =
+            plan->registers[index] != MIGA80_NO_REGISTER
+                ? plan->registers[index]
+                : MIGA80_FIX_LOW_SCRATCH_REGISTER;
+
+        if (plan->registers[value->right] == fix_destination &&
+            function->values[value->right].opcode !=
+                MIGA80_VALUE_CONSTANT) {
+            source = value->left;
+        } else if (!emit_move(output, function, plan, value->left,
+                              fix_destination)) {
+            return 0;
+        }
+        emitted = emit_fix_multiply(output, function, plan, source,
+                                    fix_destination);
+        return emitted &&
+               store_spilled_result(output, plan, index, fix_destination);
+    }
+
+    if (value->opcode == MIGA80_VALUE_DIV_FIX) {
+        const int fix_destination =
+            plan->registers[index] != MIGA80_NO_REGISTER
+                ? plan->registers[index]
+                : MIGA80_FIX_DIV_LOW_SCRATCH_REGISTER;
+
+        if (!emit_move(output, function, plan, value->right,
+                       MIGA80_FIX_DIVISOR_SCRATCH_REGISTER) ||
+            !emit_move(output, function, plan, value->left,
+                       fix_destination)) {
+            return 0;
+        }
+        emitted = emit_fix_division(
+            output, function, index,
+            function->values[value->right].opcode != MIGA80_VALUE_CONSTANT,
+            fix_destination);
+        return emitted &&
+               store_spilled_result(output, plan, index, fix_destination);
+    }
+
     if (opcode_is_commutative(value->opcode) &&
         plan->registers[value->right] == destination &&
         function->values[value->right].opcode != MIGA80_VALUE_CONSTANT) {
@@ -1380,6 +1603,8 @@ static int emit_value(FILE *output,
     if (emitted && (value->opcode == MIGA80_VALUE_ADD ||
                     value->opcode == MIGA80_VALUE_SUB ||
                     value->opcode == MIGA80_VALUE_MUL ||
+                    value->opcode == MIGA80_VALUE_MUL_FIX ||
+                    value->opcode == MIGA80_VALUE_DIV_FIX ||
                     value->opcode == MIGA80_VALUE_DIV ||
                     value->opcode == MIGA80_VALUE_DIV_U)) {
         emitted = miga80_emit_gnu_m68k_normalize_integer(
@@ -1804,7 +2029,8 @@ static int emit_allocated_function(
                 &function->values[index];
 
             if (!value->live ||
-                (value->opcode != MIGA80_VALUE_DIV &&
+                (value->opcode != MIGA80_VALUE_DIV_FIX &&
+                 value->opcode != MIGA80_VALUE_DIV &&
                  value->opcode != MIGA80_VALUE_DIV_U) ||
                 function->values[value->right].opcode ==
                     MIGA80_VALUE_CONSTANT) {
@@ -1822,6 +2048,35 @@ static int emit_allocated_function(
             !miga80_emit_gnu_m68k_fault_tail(output, function->name)) {
             return fail(diagnostic, 0U, 0U,
                         "unable to write O1 division fault tail");
+        }
+    }
+    {
+        int has_conversion_fault = 0;
+        unsigned int index;
+
+        for (index = 0U; index < function->value_count; ++index) {
+            const struct miga80_value_instruction *value =
+                &function->values[index];
+
+            if (!value->live ||
+                value->opcode != MIGA80_VALUE_FIX_FROM_I32 ||
+                function->values[value->left].opcode ==
+                    MIGA80_VALUE_I32_FROM_FIX) {
+                continue;
+            }
+            if (!miga80_emit_gnu_m68k_conversion_fault_site(
+                    output, function->name, index, value->line,
+                    value->column)) {
+                return fail(diagnostic, value->line, value->column,
+                            "unable to write O1 conversion fault site");
+            }
+            has_conversion_fault = 1;
+        }
+        if (has_conversion_fault &&
+            !miga80_emit_gnu_m68k_conversion_fault_tail(
+                output, function->name)) {
+            return fail(diagnostic, 0U, 0U,
+                        "unable to write O1 conversion fault tail");
         }
     }
     if (!miga80_emit_gnu_m68k_constant_pool(output, function->name,
@@ -1842,6 +2097,8 @@ int miga80_emit_gnu_m68k_o1(FILE *output,
     struct optimizer_workspace *workspace;
     struct allocation_plan *plan;
     struct cfg_liveness *liveness;
+    unsigned int register_count = MIGA80_DATA_REGISTER_COUNT;
+    unsigned int index;
     int emitted;
 
     if (output == NULL || function == NULL || diagnostic == NULL) {
@@ -1851,6 +2108,17 @@ int miga80_emit_gnu_m68k_o1(FILE *output,
     if (!validate_value_function(function, diagnostic)) {
         return 0;
     }
+    for (index = 0U; index < function->value_count; ++index) {
+        if (function->values[index].live &&
+            function->values[index].opcode == MIGA80_VALUE_DIV_FIX) {
+            register_count = MIGA80_FIX_DIV_REGISTER_COUNT;
+            break;
+        }
+        if (function->values[index].live &&
+            function->values[index].opcode == MIGA80_VALUE_MUL_FIX) {
+            register_count = MIGA80_FIX_REGISTER_COUNT;
+        }
+    }
     workspace = (struct optimizer_workspace *)malloc(sizeof(*workspace));
     if (workspace == NULL) {
         return fail(diagnostic, 0U, 0U,
@@ -1859,18 +2127,42 @@ int miga80_emit_gnu_m68k_o1(FILE *output,
     plan = &workspace->plan;
     liveness = &workspace->liveness;
     if (!build_cfg_liveness(function, liveness, diagnostic) ||
-        !build_allocation_plan(function, liveness,
-                               MIGA80_DATA_REGISTER_COUNT, plan,
+        !build_allocation_plan(function, liveness, register_count, plan,
                                diagnostic)) {
         free(workspace);
         return 0;
     }
     if (plan->spill_slot_count != 0U &&
         !build_allocation_plan(function, liveness,
-                               MIGA80_SPILL_REGISTER_COUNT, plan,
-                               diagnostic)) {
+                               register_count < MIGA80_SPILL_REGISTER_COUNT
+                                   ? register_count
+                                   : MIGA80_SPILL_REGISTER_COUNT,
+                               plan, diagnostic)) {
         free(workspace);
         return 0;
+    }
+    if (register_count == MIGA80_FIX_DIV_REGISTER_COUNT) {
+        plan->saved_registers[MIGA80_FIX_DIVISOR_SCRATCH_REGISTER] = 1;
+        plan->saved_registers[MIGA80_SPILL_SCRATCH_REGISTER] = 1;
+        for (index = 0U; index < function->value_count; ++index) {
+            if (function->values[index].live &&
+                function->values[index].opcode == MIGA80_VALUE_DIV_FIX &&
+                plan->registers[index] == MIGA80_NO_REGISTER) {
+                plan->saved_registers[MIGA80_FIX_DIV_LOW_SCRATCH_REGISTER] =
+                    1;
+                break;
+            }
+        }
+    } else if (register_count == MIGA80_FIX_REGISTER_COUNT) {
+        plan->saved_registers[MIGA80_SPILL_SCRATCH_REGISTER] = 1;
+        for (index = 0U; index < function->value_count; ++index) {
+            if (function->values[index].live &&
+                function->values[index].opcode == MIGA80_VALUE_MUL_FIX &&
+                plan->registers[index] == MIGA80_NO_REGISTER) {
+                plan->saved_registers[MIGA80_FIX_LOW_SCRATCH_REGISTER] = 1;
+                break;
+            }
+        }
     }
     emitted = emit_allocated_function(output, function, plan, diagnostic);
     free(workspace);

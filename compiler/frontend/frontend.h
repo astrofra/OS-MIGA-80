@@ -24,6 +24,7 @@ enum miga80_type {
     MIGA80_TYPE_U8,
     MIGA80_TYPE_I16,
     MIGA80_TYPE_U16,
+    MIGA80_TYPE_FIX,
     MIGA80_TYPE_STRING,
     MIGA80_TYPE_SYMBOL,
     MIGA80_TYPE_NONE
@@ -50,6 +51,7 @@ struct miga80_diagnostic {
 
 enum miga80_ast_kind {
     MIGA80_AST_LITERAL_I32,
+    MIGA80_AST_LITERAL_FIX,
     MIGA80_AST_LITERAL_BOOL,
     MIGA80_AST_LITERAL_STRING,
     MIGA80_AST_LITERAL_SYMBOL,
@@ -61,8 +63,12 @@ enum miga80_ast_kind {
     MIGA80_AST_ADD_I32,
     MIGA80_AST_SUB_I32,
     MIGA80_AST_MUL_I32,
+    MIGA80_AST_MUL_FIX,
+    MIGA80_AST_DIV_FIX,
     MIGA80_AST_DIV_I32,
     MIGA80_AST_DIV_U32,
+    MIGA80_AST_FIX_FROM_I32,
+    MIGA80_AST_I32_FROM_FIX,
     MIGA80_AST_EQ,
     MIGA80_AST_NE,
     MIGA80_AST_LT_I32,
@@ -131,9 +137,18 @@ int miga80_parse_function(const char *source, size_t source_size,
                           struct miga80_diagnostic *diagnostic);
 int miga80_divide_i32(uint32_t dividend, uint32_t divisor,
                       uint32_t *quotient);
+int miga80_parse_fix_literal(const char *text, size_t length,
+                             uint32_t *value);
+uint32_t miga80_multiply_fix(uint32_t left, uint32_t right);
+int miga80_divide_fix(uint32_t dividend, uint32_t divisor,
+                      uint32_t *quotient);
+int miga80_convert_i32_to_fix(uint32_t input, uint32_t *result);
+uint32_t miga80_convert_fix_to_i32(uint32_t input);
 const char *miga80_type_name(enum miga80_type type);
 int miga80_type_is_integer(enum miga80_type type);
 int miga80_type_is_signed_integer(enum miga80_type type);
+int miga80_type_is_numeric(enum miga80_type type);
+int miga80_type_is_signed_numeric(enum miga80_type type);
 int miga80_type_is_scalar(enum miga80_type type);
 int miga80_type_is_address(enum miga80_type type);
 int miga80_type_is_value(enum miga80_type type);

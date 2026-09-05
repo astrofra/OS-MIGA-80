@@ -480,7 +480,8 @@ when the compiler proves it lossless at compile time. There are no polymorphic
 or union types and no multiple returns in version 1. Local inference is kept
 only as a possible later language extension, not as part of the first release.
 The bootstrap currently implements this contract for `i8`, `u8`, `i16`,
-`u16`, `i32`, and `bool`; its `void` return path remains to be implemented.
+`u16`, `i32`, `fix`, `bool`, `string`, and `symbol`; its `void` return path
+remains to be implemented.
 Phase 3 MUST freeze a grammar and a Lua-compatibility matrix before implementing
 the production parser.
 
@@ -514,7 +515,7 @@ The required built-in types are:
 
 - `bool`;
 - `i8`, `u8`, `i16`, `u16`, and `i32`;
-- `fix`, provisionally a signed 16.16 fixed-point value;
+- `fix`, a signed two's-complement Q16.16 fixed-point value;
 - `color`, `layer`, `button`, `sprite_id`, and similar small domain types where they prevent accidental API misuse;
 - immutable, interned `string` or `symbol` values;
 - fixed-layout records;
@@ -527,12 +528,19 @@ These names are exact source spellings. In particular, version 1 has no
 
 `void` is valid only as a function return type. There is no implicit `any`,
 universal tagged-value type, polymorphic type, or union in the stock profile.
-Numeric literals are typed from an explicit context. Narrowing,
-signed/unsigned changes, and `i32`/`fix` conversion require an explicit
+An integer literal has type `i32`; a decimal point selects `fix` directly.
+Narrowing, signed/unsigned changes, and `i32`/`fix` conversion require an explicit
 conversion. The bootstrap admits only an `i32` constant expression converted
 to `i8`, `u8`, `i16`, or `u16` when the final value is provably representable;
 all other implicit conversion remains rejected. No source operation may cause
 the compiler or runtime to link software floating-point support.
+
+The bootstrap explicit numeric conversions are deliberately limited to
+`fix(i32)` and `i32(fix)`. `fix(i32)` accepts exactly -32768 through 32767,
+shifts the value left by 16, rejects an out-of-range constant at compile time,
+and sends a dynamic out-of-range input to controlled fault 2 with its source
+location. `i32(fix)` truncates toward zero and cannot overflow. Conversions to
+or from narrow integer types remain future explicit operations.
 
 Top-level `local` and `const` declarations have module-static storage known at compile time and may be referenced by top-level functions, as in the example above. They do not allocate closure environments. Nested functions that capture activation-local values remain excluded in version 1.0.
 
@@ -541,9 +549,15 @@ checked conversion helpers MUST be available. Signed integer division truncates
 toward zero, defines minimum / `-1` as a per-width wrapping minimum, rejects a
 provably zero divisor at compile time, and otherwise reaches a controlled
 source-located runtime fault. Unsigned integer division has the analogous
-zero-divisor behavior and uses unsigned quotient semantics. Fixed-point
-multiplication, division, trigonometry, and rounding
-semantics MUST be bit-exact across host tests and the 68020 backend.
+zero-divisor behavior and uses unsigned quotient semantics. `fix` addition,
+subtraction, and negation wrap modulo 2^32. Multiplication forms the exact
+signed 64-bit product, extracts bits 16 through 47 (rounding toward negative
+infinity), and wraps to 32 bits. Decimal literals are converted without host
+floating point to nearest Q16.16, with ties away from zero. Fixed-point
+division computes `(a * 65536) / b`, truncates toward zero, wraps to 32 bits,
+and uses the common controlled zero-divisor fault. Trigonometry and every later
+rounding operation MUST remain bit-exact across host tests and the 68020
+backend.
 
 ### 10.5 Records, arrays, and optimized dictionaries
 
@@ -584,7 +598,7 @@ termination, and compares by pointer identity because equal literals are
 canonicalized. The implemented `symbol("name")` value is an opaque nonzero
 32-bit interned identity, suitable for constant-time equality and dictionary
 keys but not arithmetic or ordering. Conversion between the two is never
-implicit. ABI 0.4 fixes their register classes and representation for one
+implicit. ABI 0.6 fixes their register classes and representation for one
 bounded function; cartridge-wide merging and deterministic ID rewriting remain
 requirements of the future multi-function pack/link step.
 
@@ -651,16 +665,17 @@ Generated code MUST NOT address AmigaOS libraries, custom-chip registers, the Co
 ABI preservation is executable behavior, not documentation alone. Before
 invoking a generated function, the host runner MUST initialize callee-saved
 registers, the stack, and guard memory with recognizable values, then verify
-them after return. [MIGA Lua Native ABI 0.4](./MIGA-Lua-native-ABI-v0.md)
+them after return. [MIGA Lua Native ABI 0.6](./MIGA-Lua-native-ABI-v0.md)
 freezes the bootstrap register, immutable-value, and stack core: scalar
 arguments in `D0-D2`, scalar result in `D0`, string arguments in `A0-A1`,
 string result in `A0`, `D3-D7` and `A2-A6` callee-saved, runtime context in
 `A5`, optional frame pointer in `A6`, and four-byte stack alignment.
 Runtime-context offset zero points to the
 non-returning controlled fault handler; fault code, source line, and source
-column arrive in `D0-D2`. Multiple returns are excluded from language version
-1; stack arguments, additional traps/context entries, and fixed-point rules
-remain ABI-extension decisions.
+column arrive in `D0-D2`. Code 1 denotes numeric division by zero and code 2
+denotes an explicit numeric conversion outside its destination range. Multiple
+returns are excluded from language version 1; stack arguments and additional
+traps/context entries remain ABI-extension decisions.
 
 ### 10.9 Host-side generated-code execution
 
@@ -1334,13 +1349,14 @@ report formats remain regression fixtures so distributed candidate images can
 still be diagnosed, but their timings must not be pooled with format 3.
 
 The pinned Musashi runner foundation and compiler connection are implemented.
-One explicitly typed `i8`/`u8`/`i16`/`u16`/`i32`/`bool`/`string`/`symbol`
+One explicitly typed `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`string`/`symbol`
 function with typed local declarations, assignments, signed/unsigned
-comparisons and `/`, immutable literal equality, statement-only `/=`, nested `if`/`else`,
+comparisons, integer `/`, fixed-point multiplication/division, explicit
+`fix(i32)`/`i32(fix)`, immutable literal equality, statement-only `/=`, nested `if`/`else`,
 and nested `while` is parsed into a bounded AST, lowered to a typed multi-block
-stack IR, and interpreted as a host oracle. ABI 0.4 freezes the register/stack
+stack IR, and interpreted as a host oracle. ABI 0.6 freezes the register/stack
 core, immutable descriptor/ID representation, mixed register classes, and first
-controlled-fault entry in a machine-readable module shared by the frontend,
+controlled-fault entry and numeric fault codes in a machine-readable module shared by the frontend,
 backend, and Musashi checks, with a saved-register negative control.
 The `-O1` path renames locals through cyclic CFGs, creates typed branch and loop `phi` joins,
 folds and simplifies values, removes dead values and overwritten assignments,
@@ -1348,13 +1364,14 @@ solves fixed-point per-block liveness with edge-specific `phi` uses, reuses
 locations across exclusive branches, coalesces compatible `phi` slots,
 resolves parallel edge copies including cycles, requires one canonical latch
 and exit per cyclic loop, folds multiple `continue`/`break` sites through
-binary control funnels, preserves dynamic division faults even when their
-result is dead, preserves used saved registers, and renders assembly
+binary control funnels, preserves dynamic division and conversion faults even
+when their result is dead, preserves used saved registers, and renders assembly
 byte-identically from host and 68020 compiler builds. When seven ordinary registers are insufficient in a
 spilling plan it uses `D7` as a saved scratch, reuses bounded spill slots, and
 emits an ABI `A6` frame. Seven ordinary source corpora at `-O0` and `-O1`, a
 signed-division corpus, an exact-width integer corpus, an immutable-value
-corpus, and a forced spill fixture agree with their oracles across 124 Musashi executions while recording
+corpus, a fixed-point corpus, a fixed-division corpus, an explicit-conversion
+corpus, and a forced spill fixture agree with their oracles across 168 Musashi executions while recording
 image size, instruction count,
 maximum callee stack use, and controlled fault source locations. Calls, `void`
 code generation,
@@ -1427,10 +1444,10 @@ This workstream follows [MIGA-80 Local 68020 Tooling](./MIGA-80-local-68020-tool
 
 1. **Runner foundation — Phase 0 (implemented):** embed Musashi, select 68EC020 mode, implement bounded big-endian memory, execute a reviewed `mul_add` function, stop through a return sentinel/trap, and report a short failure trace.
 2. **Compiler connection — Phase 0/early Phase 3 (initial subset implemented):** render integer arithmetic and return through textual assembly, assemble/link automatically, retain ELF symbols, load a flat image, and execute several inputs from the ordinary host test command. The bootstrap currently retains an Amiga relocatable object rather than ELF, so ELF/symbol-manifest loading remains part of this step.
-3. **ABI freeze — early Phase 3 (register/stack, exact-width scalar, immutable value, source-local, loop-edge, spill-frame, and first fault tranches implemented):** ABI 0.4 fixes register roles, `A5` runtime-context ownership, scalar and string returns, canonical `bool`/`i8`/`u8`/`i16`/`u16`/`i32`/`symbol` register and slot representations, canonical string descriptors, mixed scalar/address argument placement, per-width wrapping, frame bounds, stack alignment, executable saved-register checks, and runtime-context offset zero for a non-returning controlled fault handler. `-O0` assigns typed source locals to bounded `A6` slots; `-O1` renames locals through cyclic control flow and emits bounded `A6` spill/edge frames when needed while restoring `D3-D7/A6`. Calls, `void`, cartridge-wide pool linking, additional context entries, and additional fault codes remain open extensions; multiple returns are excluded from version 1.
-4. **Semantic expansion — Phase 3 (`bool`, exact-width integers, immutable `string`/`symbol`, signed/unsigned comparisons and division, `if`/`else`, `while`, `break`, `continue`, and `/=` implemented):** the typed IR now has bounded cyclic multi-block control flow, canonical single-latch/single-exit loops, binary funnels for multiple loop-control sites, loop-carried O1 value joins, fixed-point CFG liveness, `phi`-slot coalescing, parallel edge-copy resolution, fall-through jump elision, per-width result normalization, a bounded deduplicated immutable pool, and controlled source-located division-by-zero faults. Add fixed point, globals, arrays, records, dictionaries, other update sugar and guards, runtime mocks, negative tests, and deterministic randomized differential tests.
+3. **ABI freeze — early Phase 3 (register/stack, exact-width scalar, fixed-point, immutable value, source-local, loop-edge, spill-frame, and numeric-fault tranches implemented):** ABI 0.6 fixes register roles, `A5` runtime-context ownership, scalar and string returns, canonical `bool`/`i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`symbol` register and slot representations, canonical string descriptors, mixed register classes, per-width wrapping, Q16.16 multiplication/division and explicit conversion semantics, frame bounds, stack alignment, executable saved-register checks, and runtime-context offset zero for a non-returning controlled fault handler. Fault codes 1 and 2 identify numeric division by zero and conversion out of range. `-O0` assigns typed source locals to bounded `A6` slots; `-O1` renames locals through cyclic control flow and emits bounded `A6` spill/edge frames when needed while restoring `D3-D7/A6`. Calls, `void`, cartridge-wide pool linking, additional context entries, and later fault codes remain open extensions; multiple returns are excluded from version 1.
+4. **Semantic expansion — Phase 3 (`bool`, exact-width integers, signed Q16.16 `fix` including division and explicit `i32` conversions, immutable `string`/`symbol`, signed/unsigned comparisons and integer division, `if`/`else`, `while`, `break`, `continue`, and `/=` implemented):** the typed IR now has bounded cyclic multi-block control flow, canonical single-latch/single-exit loops, binary funnels for multiple loop-control sites, loop-carried O1 value joins, fixed-point CFG liveness, `phi`-slot coalescing, parallel edge-copy resolution, fall-through jump elision, per-width result normalization, bit-exact Q16.16 multiplication/division/conversion, a bounded deduplicated immutable pool, and controlled source-located numeric faults. Add globals, arrays, records, dictionaries, narrow explicit conversions, other update sugar and guards, runtime mocks, negative tests, and deterministic randomized differential tests.
 5. **Direct-encoder convergence — Phase 3:** compare the shipping encoder with the assembly route and typed-IR oracle until encoding, relocation, source maps, and behavior agree; retain only selective normalized-disassembly goldens.
-6. **Performance regression — Phase 3 onward (cyclic CFG allocation, division, exact-width, and immutable-value signals implemented):** the `-O0`/`-O1` differential records code size, executed instructions, and maximum callee stack use for seven ordinary corpora, a signed-division corpus, an exact-width integer corpus, an immutable-value corpus, and a forced spill fixture. The conditional case verifies CFG-aware register reuse and the coalescing of six live `phi` values into two stack slots; the loop case reduces 308/313/48 code-bytes/instructions/stack-bytes at O0 to 188/164/28 at O1, while the loop-control image falls from 356 to 288 bytes. The division image falls from 108/28/28 to 44/7/0 on its normal path, and four controlled faults preserve their source locations. The exact-width image falls from 472 bytes at O0 to 220 at O1, with its normal paths reduced from 107-110 to 32-34 instructions and stack high-water from 44 to 20 bytes. The immutable-value image falls from 196 to 136 bytes and its paths from 46-47 to 23-24 instructions. The suite currently covers 124 Musashi executions. Approximate core cycles, calls, memory-operation counts, and representative cartridge kernels remain pending. Never translate emulator values into A1200 frame claims.
+6. **Performance regression — Phase 3 onward (cyclic CFG allocation, division, exact-width, immutable-value, fixed-point, and conversion signals implemented):** the `-O0`/`-O1` differential records code size, executed instructions, and maximum callee stack use for seven ordinary corpora, signed-integer and fixed-division corpora, an exact-width integer corpus, an immutable-value corpus, a fixed-point corpus, an explicit-conversion corpus, and a forced spill fixture. The conditional case verifies CFG-aware register reuse and the coalescing of six live `phi` values into two stack slots; the loop case reduces 308/313/48 code-bytes/instructions/stack-bytes at O0 to 188/164/28 at O1, while the loop-control image falls from 356 to 288 bytes. The integer-division image falls from 108/28/28 to 44/7/0 on its normal path, and four controlled faults preserve their source locations. The exact-width image falls from 472 bytes at O0 to 220 at O1, with its normal paths reduced from 107-110 to 32-34 instructions and stack high-water from 44 to 20 bytes. The immutable-value image falls from 196 to 136 bytes and its paths from 46-47 to 23-24 instructions. The fixed-point image falls from 196 to 104 bytes and its paths from 57-58 to 25-26 instructions. The fixed-division image falls from 300 to 164 bytes and its normal paths from 95-101 to 51-55 instructions. The conversion image falls from 208 to 112 bytes and its normal paths from 40-50 to 22-26 instructions. The suite currently covers 168 Musashi executions. Approximate core cycles, calls, memory-operation counts, and representative cartridge kernels remain pending. Never translate emulator values into A1200 frame claims.
 7. **Independent CPU validation — late Phase 3 or hardening:** add Moira only when the edge-case corpus is large enough to justify the adapter; investigate every divergent final state and keep real hardware authoritative.
 
 The runner mocks graphics/audio/input calls only at the native ABI boundary. Copper lists, blits, sprite DMA, audio DMA, raster interrupts, Chip-RAM contention, C2P/display interaction, and 25/50 Hz deadlines remain exclusively in the UAE/real-hardware workstream.

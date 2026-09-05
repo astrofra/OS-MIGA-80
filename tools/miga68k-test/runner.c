@@ -64,7 +64,7 @@ static const uint8_t invalid_read_code[] = {0x20, 0x10, 0x4e, 0x75};
 /* BRA.S * -- used to prove that non-returning code is budget-stopped. */
 static const uint8_t infinite_loop_code[] = {0x60, 0xfe};
 
-/* MOVEQ #0,D3; RTS -- proves that ABI 0.4 saved-register damage is caught. */
+/* MOVEQ #0,D3; RTS -- proves that ABI 0.6 saved-register damage is caught. */
 static const uint8_t saved_register_clobber_code[] = {0x76, 0x00, 0x4e, 0x75};
 
 static struct trace_buffer *active_trace;
@@ -485,7 +485,7 @@ static int run_saved_register_guard_test(void)
 
     fprintf(stderr,
             "TEST: guard/saved_register\n"
-            "RESULT: ABI 0.4 saved-register damage was not detected\n"
+            "RESULT: ABI 0.6 saved-register damage was not detected\n"
             "INSTRUCTIONS: %u\n",
             instruction_count);
     print_registers();

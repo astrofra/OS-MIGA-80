@@ -1,7 +1,9 @@
 # MIGA Lua Compiler Bootstrap
 
-**Status:** exact-width integers, immutable strings/symbols, typed locals,
-signed/unsigned division, controlled faults, normalized loops,
+**Status:** exact-width integers, signed Q16.16 fixed point including division
+and explicit `i32` conversions,
+immutable strings/symbols, typed locals, signed/unsigned integer division,
+controlled faults, normalized loops,
 `break`/`continue`, loop `phi`, `-O1`, and spills implemented
 
 ## Scope
@@ -15,7 +17,7 @@ function   = "function", name, "(", [ parameters ], ")", ":", value-type,
              { statement }, return-statement, "end" ;
 parameters = parameter, { ",", parameter } ;
 parameter  = name, ":", value-type ;
-value-type = integer-type | "bool" | "string" | "symbol" ;
+value-type = integer-type | "fix" | "bool" | "string" | "symbol" ;
 integer-type = "i8" | "u8" | "i16" | "u16" | "i32" ;
 statement  = local-declaration | control-statement ;
 control-statement = assignment | if-statement | while-statement
@@ -30,15 +32,25 @@ return-statement = "return", expression ;
 expression = sum, { ( "==" | "~=" | "!=" | "<" | "<=" | ">" | ">=" ), sum } ;
 sum        = product, { ( "+" | "-" ), product } ;
 product    = unary, { ( "*" | "/" ), unary } ;
-unary      = "-", unary | integer | "true" | "false" | string-literal
+unary      = "-", unary | primary ;
+primary    = integer | fix-literal | "true" | "false" | string-literal
              | "symbol", "(", string-literal, ")"
-             | parameter-name | local-name
-             | "(", expression, ")" ;
+             | ( "fix" | "i32" ), "(", expression, ")"
+             | parameter-name | local-name | "(", expression, ")" ;
 string-literal = single-quoted-string | double-quoted-string ;
+fix-literal = digits, ".", digit, { digit } ;
 ```
 
 Whitespace and Lua line comments beginning with `--` are accepted. Decimal
-literals are limited to `0` through `2147483647`. Short string literals use
+integer literals are limited to `0` through `2147483647`. A decimal point
+selects `fix` directly: `1` is `i32`, while `1.0` is Q16.16 `fix`. A fixed
+literal requires one through nine fractional digits and is converted with
+integer arithmetic to the nearest Q16.16 value, with exact half cases rounded
+away from zero after unary negation. Source parsing never uses host floating
+point. The positive literal magnitude is limited to the representable signed
+maximum; `-32768.0` remains accepted by the typed `--eval` interface, while a
+source expression can obtain that wrapping bit pattern through arithmetic.
+Short string literals use
 single or double quotes and accept `\\`, `\'`, `\"`, `\n`, `\r`, `\t`,
 `\0`, and `\xNN`; raw newlines are rejected. A function has at most 16
 function-scoped typed locals and 32 statements including nested branches and
@@ -49,7 +61,10 @@ immutable. Types are exact. There is no general implicit conversion. The one
 implemented exception adapts an `i32` constant expression to `i8`, `u8`,
 `i16`, or `u16` when its final value is representable in the destination type;
 an out-of-range constant is rejected. Arithmetic, `/`, and ordered comparisons
-require two operands of the same integer type. `==`, `~=`, and its exact alias
+require two operands of the same numeric type. There is no implicit conversion
+between integers and `fix`; the two implemented explicit forms are `fix(i32)`
+and `i32(fix)`.
+`==`, `~=`, and its exact alias
 `!=` require two operands of the same value type; `if` and `while` conditions
 require `bool`. `if` currently requires an
 explicit `else`. Declarations and returns inside `if` branches or loop bodies
@@ -60,13 +75,27 @@ valid when it is reached through another branch of an enclosing `if`. The
 initial ABI supports at most three scalar parameters in `D0` through `D2` and
 two `string` parameters in `A0`/`A1`. A scalar result uses `D0`; a `string`
 result uses `A0`.
-Arithmetic wraps at the declared width. Signed `/` truncates toward zero and
+Integer arithmetic wraps at the declared width. Signed integer `/` truncates toward zero and
 minimum-value divided by `-1` wraps to that minimum value; unsigned `/` uses
 ordinary unsigned division. A provably constant zero divisor is a compile-time
 error. Every other divisor not proven nonzero is checked before `DIVS.L` or
 `DIVU.L` and branches to a controlled, source-located runtime fault when zero.
 Register, frame, and fault placement follows
-[MIGA Lua Native ABI 0.4](./MIGA-Lua-native-ABI-v0.md).
+[MIGA Lua Native ABI 0.6](./MIGA-Lua-native-ABI-v0.md).
+
+`fix` is signed Q16.16 in one 32-bit scalar. Addition, subtraction, and
+negation wrap modulo 2^32. Multiplication forms a signed 64-bit product and
+extracts bits 16 through 47, which rounds toward negative infinity before the
+32-bit wrapping result. Ordered comparisons are signed comparisons on the raw
+Q16.16 value. Fixed-point division computes `(a * 65536) / b`, truncates toward
+zero, and keeps the low 32 bits. A constant zero divisor is rejected; a
+dynamic zero divisor reaches the same controlled, source-located fault as
+integer division. `fix(value)` accepts only `i32`, is exact for values from
+-32768 through 32767, and shifts the integer left by 16. An out-of-range
+constant is a compile-time error; an out-of-range dynamic input reaches
+controlled fault 2 with the conversion's source location. `i32(value)` accepts
+only `fix`, truncates toward zero, and cannot overflow because every Q16.16
+integral part fits `i32`. Both forms fold when their input is constant.
 
 The version 1 language contract requires an explicit return annotation and
 includes `void`, but `void` code generation is not in this bootstrap tranche.
@@ -82,9 +111,9 @@ pool merging and ID rewriting remain part of the future multi-function
 pack/link step. There are no `byte` or `word` aliases: the source spellings
 remain `i8`, `u8`, `i16`, and `u16`.
 
-Calls, fixed point, multiple functions, multiple returns, hexadecimal
-source literals, and the minimum `i32` literal spelling are likewise rejected
-rather than guessed.
+Calls, conversions involving the narrow integer types, multiple functions,
+multiple returns, hexadecimal source literals, and the minimum `i32` literal
+spelling are likewise rejected rather than guessed.
 
 Arrays are not part of the bootstrap grammar yet. Their frozen version 1
 language contract is nevertheless zero-based: for `array<T, N>`, valid indices
@@ -113,7 +142,7 @@ The implementation has four bounded, host-buildable layers:
    body has no syntactic path back to the header is represented as acyclic and
    needs no unreachable latch. The host interpreter follows this CFG as the
    semantic oracle and uses unsigned C operations to specify per-width
-   wrapping, signed/unsigned comparisons, and division without C
+   wrapping, signed/unsigned comparisons, fixed-point multiplication, and division without C
    signed-overflow behavior.
 3. `-O1` renames locals to values throughout the CFG and creates typed `phi`
    values at two-predecessor joins and loop headers. It identifies natural
@@ -122,9 +151,9 @@ The implementation has four bounded, host-buildable layers:
    `phi` operands before the latch has been lowered, then completes their backward
    inputs and removes trivial self-joins. Constant folding, simplification,
    dead-value removal, and `live-in`/`live-out` analysis all accept cyclic value
-   flow. A dynamic division remains live even when its result is overwritten,
-   because its zero-divisor fault is observable; division by a proven nonzero
-   constant remains removable. `phi` operands are edge-specific uses. Non-overlapping `phi` live
+   flow. A dynamic division or checked `fix(i32)` remains live even when its
+   result is overwritten, because its fault is observable; a proven-safe
+   folded operation remains removable. `phi` operands are edge-specific uses. Non-overlapping `phi` live
    regions reuse stack slots; edge transfers are scheduled as parallel copies,
    with one bounded temporary slot reserved only when a genuine copy cycle must
    be broken. Calls will need an explicit side-effect rule before value
@@ -133,16 +162,27 @@ The implementation has four bounded, host-buildable layers:
    parameter/local slots and expression-stack temporaries as a baseline. The
    default `-O1` keeps current local and expression values in registers and
    preserves any allocated `D3-D7` registers with `MOVEM`. Spilling functions
-   use ABI 0.4 `LINK`/`UNLK` frames, negative `A6` offsets, and `D7` as a saved
+   use ABI 0.6 `LINK`/`UNLK` frames, negative `A6` offsets, and `D7` as a saved
    scratch register. Both backends omit an unconditional jump when its target
    is the next emitted block, so the dedicated latch does not add a redundant
    branch to the hot loop path. Dynamic divisions add one `TST.L` and one
-   normally untaken branch before native `DIVS.L` or `DIVU.L`; cold per-site stubs pass the
-   fault code, line, and column to the handler pointer in the `A5` context.
+   normally untaken branch before the integer or fixed-point division
+   sequence; cold per-site stubs pass the fault code, line, and column to the
+   handler pointer in the `A5` context. Dynamic `fix(i32)` emits an unsigned
+   biased range guard before a `SWAP`/`CLR.W` exact conversion unless O1 can
+   prove the input came directly from `i32(fix)`. The latter uses a conditional
+   `+0xffff`, then `SWAP`/`EXT.L`, to truncate toward zero without a helper call.
    String literals use PC-relative `LEA` and leave no relocation in the flat
    image. O1 currently copies live `A0`/`A1` string inputs into its uniform
    data-register value allocator; dedicated address-register allocation is a
    later measured optimization, not an ABI requirement.
+   A live `fix` multiplication reserves `D7` as the high half of the 64-bit
+   `MULS.L` result, extracts the Q16.16 result with `MOVE.W` plus `SWAP`, and
+   preserves `D7` once in the function prologue/epilogue.
+   A live `fix` division reserves `D6` for the divisor magnitude and `D7` for
+   the high dividend/remainder, then uses bounded `DIVUL.L` plus 64/32-bit
+   `DIVU.L` steps. O1 allocates ordinary values only in `D0-D4` for such a
+   function and reserves `D5` only when a fixed quotient spills.
 
 For the current local toolchain, GNU `m68k-amigaos-as` retains a relocatable
 Amiga object and `m68k-amigaos-objcopy` extracts the flat image consumed by
@@ -204,7 +244,15 @@ and wrapping normalization. A tenth immutable-value corpus adds four
 executions covering both CFG paths at both optimization levels,
 decoded-literal deduplication, string/symbol `phi` values, pointer/ID equality,
 and PC-relative descriptors. A synthetic value-IR schedule then forces three
-spills and adds six more oracle comparisons, bringing the total to 124. This is
+spills and adds six more oracle comparisons. An eleventh fixed-point corpus
+adds eight executions covering exact multiplication, negative-infinity
+rounding, wrapping, both CFG paths, and `D7` preservation, bringing the total
+to 132. A twelfth fixed-division corpus adds 16 successful results and four
+controlled zero faults, including signed truncation, wrapping quotients,
+`/=`, and `D6-D7` preservation, bringing the total to 152. A thirteenth
+conversion corpus adds 12 results and four source-located range faults,
+covering both inclusive integer bounds and signed truncation, for 168 total
+Musashi executions. This is
 necessary because the current bounded source subset cannot naturally exceed
 all eight data registers. The reports retain image size, executed instruction
 count, and maximum callee stack use, while the runner
