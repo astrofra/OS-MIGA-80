@@ -531,8 +531,22 @@ int miga80_emit_gnu_m68k(FILE *output,
                                       (unsigned int)instruction->operand);
             }
             break;
+        case MIGA80_IR_CALL_PSET:
+            success = output_line(
+                output,
+                "        move.l  (%%a7)+,%%d2\n"
+                "        move.l  (%%a7)+,%%d1\n"
+                "        move.l  (%%a7)+,%%d0\n"
+                "        movea.l %u(%%a5),%%a0\n"
+                "        jsr     (%%a0)\n",
+                MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET);
+            break;
         case MIGA80_IR_RETURN:
-            if (instruction->type == MIGA80_TYPE_STRING) {
+            if (instruction->type == MIGA80_TYPE_VOID) {
+                success = output_line(output,
+                                      "        unlk    %%a6\n"
+                                      "        rts\n");
+            } else if (instruction->type == MIGA80_TYPE_STRING) {
                 success = output_line(output,
                                       "        movea.l (%%a7)+,%%a0\n"
                                       "        unlk    %%a6\n"

@@ -8,6 +8,7 @@ maximum_columns=44
 source_checksum=6600f4de
 framebuffer_checksum=f05779cc
 palette=workbench-sunset
+source_playfield=pf1
 palette_roundtrip=pass
 source_view=pass
 result=pass

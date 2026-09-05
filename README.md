@@ -136,19 +136,28 @@ Run the hosted 256×256 AGA dual-playfield smoke test separately with:
 gmake aga-screen-smoke
 ```
 
-Build and boot-test the first visible MIGA-80 vertical slice with:
+Build and boot-test the first complete MIGA-80 vertical slice with:
 
 ```sh
 gmake source-view-test miga80-demo-adf-inspect
 gmake miga80-demo-adf-fs-uae
+gmake compiler-encoder-musashi-test
+gmake miga80-demo-adf-fs-uae-autorun
 ```
 
 This produces `build/distribution/miga80-source-view.adf`. The standalone OFS
 disk launches MIGA-80, loads `DATA/DEFAULT.LUA`, and displays its complete
-30-line Mandelbrot source with the project 4×8 bitmap font. The exact ADF boot
-is checked under FS-UAE through a canonical framebuffer hash and AGA readback
-probes.
-Compilation and execution are the next vertical-slice tranches; see the
+30-line Mandelbrot source with the project 4×8 bitmap font. `F5` parses and
+lowers that source on the Amiga, directly emits a 744-byte 68020 function in
+RAM, synchronizes the instruction cache, and executes it through the private
+runtime ABI. The generated function performs 20,480 `pset` calls and publishes
+the resulting 160×128 Mandelbrot viewport. The exact ADF boot and an automated
+on-target `AUTORUN` variant are checked under FS-UAE; the latter must match the
+typed-IR and Musashi framebuffer checksum `c4604fc7`.
+
+This first executable proof deliberately uses the stack-oriented O0 direct
+encoder. Extending direct emission to the call-aware O1 register plan is the
+next performance tranche; see the
 [Mandelbrot vertical-slice plan](documentation/MIGA-80-mandelbrot-vertical-slice.md).
 
 The target is currently locked to the `libnix` Kickstart 2+ startup/runtime with

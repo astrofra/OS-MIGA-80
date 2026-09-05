@@ -68,13 +68,16 @@ COMPILER_VALUE_IR_SOURCE := compiler/value_ir/value_ir.c
 COMPILER_VALUE_IR_HEADER := compiler/value_ir/value_ir.h
 COMPILER_BACKEND_SOURCE := compiler/backend_m68k/backend.c
 COMPILER_OPTIMIZED_BACKEND_SOURCE := compiler/backend_m68k/optimized.c
+COMPILER_ENCODER_SOURCE := compiler/backend_m68k/encoder.c
 COMPILER_BACKEND_HEADER := compiler/backend_m68k/backend.h
+COMPILER_ENCODER_HEADER := compiler/backend_m68k/encoder.h
 COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) $(COMPILER_FRONTEND_SOURCE) \
 	$(COMPILER_IR_SOURCE) $(COMPILER_VALUE_IR_SOURCE) \
-	$(COMPILER_BACKEND_SOURCE) $(COMPILER_OPTIMIZED_BACKEND_SOURCE)
+	$(COMPILER_BACKEND_SOURCE) $(COMPILER_OPTIMIZED_BACKEND_SOURCE) \
+	$(COMPILER_ENCODER_SOURCE)
 COMPILER_HEADERS := $(COMPILER_ABI_HEADER) $(COMPILER_FRONTEND_HEADER) \
 	$(COMPILER_IR_HEADER) $(COMPILER_VALUE_IR_HEADER) \
-	$(COMPILER_BACKEND_HEADER)
+	$(COMPILER_BACKEND_HEADER) $(COMPILER_ENCODER_HEADER)
 MIGA80C_SOURCE := tools/miga80c/main.c
 MIGA80C_BUILD_DIR := $(HOST_BUILD_DIR)/miga80c
 MIGA80C_PROGRAM := $(MIGA80C_BUILD_DIR)/miga80c
@@ -357,8 +360,31 @@ SOURCE_VIEW_HOST_TEST_PROGRAM := $(SOURCE_VIEW_HOST_BUILD_DIR)/test
 SOURCE_VIEW_HOST_EXPECTED := tests/host/source-view/expected.txt
 SOURCE_VIEW_HOST_REPORT := $(REPORT_DIR)/source-view-host.txt
 SOURCE_VIEW_HOST_PREVIEW := $(REPORT_DIR)/source-view.ppm
+COMPILER_ENCODER_TEST_BUILD_DIR := $(HOST_BUILD_DIR)/compiler-encoder
+COMPILER_ENCODER_TEST_SOURCE := tests/host/compiler-encoder/main.c
+COMPILER_ENCODER_TEST_PROGRAM := $(COMPILER_ENCODER_TEST_BUILD_DIR)/test
+COMPILER_ENCODER_TEST_EXPECTED := tests/host/compiler-encoder/expected.txt
+COMPILER_ENCODER_TEST_REPORT := $(REPORT_DIR)/compiler-encoder-host.txt
+COMPILER_ENCODER_TEST_BINARY := $(COMPILER_ENCODER_TEST_BUILD_DIR)/default.bin
+COMPILER_ENCODER_ASSEMBLY := $(COMPILER_ENCODER_TEST_BUILD_DIR)/default.s
+COMPILER_ENCODER_ASSEMBLY_OBJECT := \
+	$(COMPILER_ENCODER_TEST_BUILD_DIR)/default.o
+COMPILER_ENCODER_ASSEMBLY_BINARY := \
+	$(COMPILER_ENCODER_TEST_BUILD_DIR)/default-assembly.bin
+COMPILER_ENCODER_MUSASHI_DIRECT_REPORT := \
+	$(REPORT_DIR)/compiler-encoder-musashi-direct.txt
+COMPILER_ENCODER_MUSASHI_ASSEMBLY_REPORT := \
+	$(REPORT_DIR)/compiler-encoder-musashi-assembly.txt
+COMPILER_ENCODER_MUSASHI_DIRECT_EXPECTED := \
+	tests/execute/mandelbrot-direct.expected
+COMPILER_ENCODER_MUSASHI_ASSEMBLY_EXPECTED := \
+	tests/execute/mandelbrot-assembly.expected
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
 MIGA80_DEMO_SOURCE := src/demo/main.c
+MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_m68k.s
+MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \
+	$(COMPILER_FRONTEND_SOURCE) $(COMPILER_IR_SOURCE) \
+	$(COMPILER_ENCODER_SOURCE)
 MIGA80_DEMO_PROGRAM := $(MIGA80_DEMO_BUILD_DIR)/miga80
 MIGA80_DEMO_MAP := $(MIGA80_DEMO_BUILD_DIR)/miga80.map
 MIGA80_DEMO_SIZE_REPORT := $(REPORT_DIR)/source-view-amiga-size.txt
@@ -367,6 +393,8 @@ MIGA80_DEMO_README := assets/demo/README.TXT
 MIGA80_DEMO_ADF_BUILDER := scripts/build-miga80-demo-adf.sh
 MIGA80_DEMO_ADF_TESTER := scripts/test-miga80-demo-adf-fs-uae.sh
 MIGA80_DEMO_ADF_EXPECTED := tests/smoke/source-view-adf/expected.txt
+MIGA80_DEMO_ADF_AUTORUN_EXPECTED := \
+	tests/smoke/source-view-adf/autorun-expected.txt
 MIGA80_DEMO_ADF := $(DISTRIBUTION_DIR)/miga80-source-view.adf
 MIGA80_DEMO_ADF_MANIFEST := \
 	$(DISTRIBUTION_DIR)/miga80-source-view.manifest.txt
@@ -418,8 +446,10 @@ C2P_BENCHMARK_CFLAGS = $(filter-out -Os,$(TARGET_CFLAGS)) -O2
 	exclusive-graphics-benchmark-fs-uae \
 	exclusive-graphics-benchmark-fs-uae-fast exclusive-graphics-test-adf \
 	exclusive-graphics-test-adf-inspect exclusive-graphics-test-adf-fs-uae \
-	source-view-test miga80-demo miga80-demo-inspect miga80-demo-adf \
+	source-view-test compiler-encoder-test compiler-encoder-musashi-test \
+	miga80-demo miga80-demo-inspect miga80-demo-adf \
 	miga80-demo-adf-inspect miga80-demo-adf-fs-uae \
+	miga80-demo-adf-fs-uae-autorun \
 	runtime-compare \
 	check run clean
 
@@ -480,16 +510,59 @@ source-view-test: $(SOURCE_VIEW_HOST_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
 		$(SOURCE_VIEW_HOST_PREVIEW) >$(SOURCE_VIEW_HOST_REPORT)
 	diff -u $(SOURCE_VIEW_HOST_EXPECTED) $(SOURCE_VIEW_HOST_REPORT)
 
+compiler-encoder-test: $(COMPILER_ENCODER_TEST_PROGRAM) \
+		$(SOURCE_VIEW_FIXTURE) $(COMPILER_ENCODER_TEST_EXPECTED)
+	@mkdir -p $(REPORT_DIR)
+	$(COMPILER_ENCODER_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
+		$(COMPILER_ENCODER_TEST_BINARY) >$(COMPILER_ENCODER_TEST_REPORT)
+	diff -u $(COMPILER_ENCODER_TEST_EXPECTED) \
+		$(COMPILER_ENCODER_TEST_REPORT)
+
+$(COMPILER_ENCODER_TEST_PROGRAM): $(COMPILER_ENCODER_TEST_SOURCE) \
+		$(COMPILER_SOURCES) $(COMPILER_HEADERS) Makefile
+	@mkdir -p $(COMPILER_ENCODER_TEST_BUILD_DIR)
+	$(HOST_CC) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) $(COMPILER_SOURCES) \
+		$(COMPILER_ENCODER_TEST_SOURCE) -o $@
+
+$(COMPILER_ENCODER_ASSEMBLY): $(MIGA80C_PROGRAM) $(SOURCE_VIEW_FIXTURE)
+	@mkdir -p $(COMPILER_ENCODER_TEST_BUILD_DIR)
+	$(MIGA80C_PROGRAM) $(SOURCE_VIEW_FIXTURE) -O0 -S -o $@
+
+$(COMPILER_ENCODER_ASSEMBLY_OBJECT): $(COMPILER_ENCODER_ASSEMBLY)
+	$(TARGET_AS) -m68020 $< -o $@
+
+$(COMPILER_ENCODER_ASSEMBLY_BINARY): \
+		$(COMPILER_ENCODER_ASSEMBLY_OBJECT)
+	$(TARGET_OBJCOPY) -O binary -j .text $< $@
+
+compiler-encoder-musashi-test: compiler-encoder-test $(MIGA68K_TEST_PROGRAM) \
+		$(COMPILER_ENCODER_ASSEMBLY_BINARY) \
+		$(COMPILER_ENCODER_MUSASHI_DIRECT_EXPECTED) \
+		$(COMPILER_ENCODER_MUSASHI_ASSEMBLY_EXPECTED)
+	$(MIGA68K_TEST_PROGRAM) --pset $(COMPILER_ENCODER_TEST_BINARY) \
+		0xc4604fc7 20480 >$(COMPILER_ENCODER_MUSASHI_DIRECT_REPORT)
+	diff -u $(COMPILER_ENCODER_MUSASHI_DIRECT_EXPECTED) \
+		$(COMPILER_ENCODER_MUSASHI_DIRECT_REPORT)
+	$(MIGA68K_TEST_PROGRAM) --pset $(COMPILER_ENCODER_ASSEMBLY_BINARY) \
+		0xc4604fc7 20480 >$(COMPILER_ENCODER_MUSASHI_ASSEMBLY_REPORT)
+	diff -u $(COMPILER_ENCODER_MUSASHI_ASSEMBLY_EXPECTED) \
+		$(COMPILER_ENCODER_MUSASHI_ASSEMBLY_REPORT)
+
 miga80-demo: $(MIGA80_DEMO_PROGRAM)
 
 $(MIGA80_DEMO_PROGRAM): $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
+		$(MIGA80_DEMO_RUNTIME_SOURCE) $(MIGA80_DEMO_COMPILER_SOURCES) \
+		$(COMPILER_ABI_HEADER) $(COMPILER_FRONTEND_HEADER) \
+		$(COMPILER_IR_HEADER) $(COMPILER_ENCODER_HEADER) \
 		$(SOURCE_VIEW_HEADER) $(SOURCE_VIEW_PALETTE_SOURCE) \
 		$(SOURCE_VIEW_PALETTE_HEADER) $(FONT4X8_GENERATED_HEADER) \
 		$(C2P_REFERENCE_SOURCE) $(C2P_REFERENCE_HEADER) Makefile
 	@mkdir -p $(MIGA80_DEMO_BUILD_DIR)
-	$(TARGET_CC) $(PROJECT_CPPFLAGS) -I$(FONT4X8_GENERATED_DIR) \
+	$(TARGET_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) \
+		-I$(FONT4X8_GENERATED_DIR) \
 		$(TARGET_CFLAGS) $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
 		$(SOURCE_VIEW_PALETTE_SOURCE) $(C2P_REFERENCE_SOURCE) \
+		$(MIGA80_DEMO_COMPILER_SOURCES) $(MIGA80_DEMO_RUNTIME_SOURCE) \
 		-Wl,-Map,$(MIGA80_DEMO_MAP) -o $@ $(TARGET_RUNTIME)
 
 miga80-demo-inspect: $(MIGA80_DEMO_PROGRAM)
@@ -519,6 +592,12 @@ miga80-demo-adf-fs-uae: $(MIGA80_DEMO_ADF) \
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=45 \
 		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
 		$(MIGA80_DEMO_ADF_EXPECTED)
+
+miga80-demo-adf-fs-uae-autorun: $(MIGA80_DEMO_ADF) \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF_AUTORUN_EXPECTED)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=180 \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
+		$(MIGA80_DEMO_ADF_AUTORUN_EXPECTED) AUTORUN
 
 fs-uae-smoke: stage
 	./scripts/test-fs-uae-runtime.sh
@@ -1117,7 +1196,8 @@ check: miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
-	source-view-test chipram-benchmark exclusive-graphics-benchmark inspect vamos-test \
+	source-view-test compiler-encoder-test compiler-encoder-musashi-test \
+	chipram-benchmark exclusive-graphics-benchmark inspect vamos-test \
 	aga-screen-smoke
 
 clean:

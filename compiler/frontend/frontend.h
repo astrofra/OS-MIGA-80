@@ -14,6 +14,7 @@
 #define MIGA80_MAX_AST_NODES 128U
 #define MIGA80_MAX_POOL_ENTRIES 32U
 #define MIGA80_MAX_POOL_BYTES 1024U
+#define MIGA80_MAX_INTRINSIC_ARGUMENTS 3U
 #define MIGA80_INVALID_NODE (-1)
 #define MIGA80_INVALID_STATEMENT UINT_MAX
 
@@ -27,6 +28,7 @@ enum miga80_type {
     MIGA80_TYPE_FIX,
     MIGA80_TYPE_STRING,
     MIGA80_TYPE_SYMBOL,
+    MIGA80_TYPE_VOID,
     MIGA80_TYPE_NONE
 };
 
@@ -100,6 +102,7 @@ enum miga80_ast_statement_kind {
     MIGA80_AST_WHILE,
     MIGA80_AST_BREAK,
     MIGA80_AST_CONTINUE,
+    MIGA80_AST_CALL_PSET,
     MIGA80_AST_RETURN
 };
 
@@ -112,6 +115,8 @@ struct miga80_ast_statement {
     unsigned int next_statement;
     unsigned int then_statement;
     unsigned int else_statement;
+    int arguments[MIGA80_MAX_INTRINSIC_ARGUMENTS];
+    unsigned int argument_count;
 };
 
 struct miga80_ast_function {

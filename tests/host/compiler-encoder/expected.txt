@@ -1,0 +1,10 @@
+source_bytes=643
+ast_nodes=73
+ast_statements=28
+ir_instructions=112
+ir_blocks=17
+encoded_bytes=744
+encoded_checksum=69f4c1eb
+oracle_pset_calls=20480
+oracle_framebuffer_checksum=c4604fc7
+result=pass

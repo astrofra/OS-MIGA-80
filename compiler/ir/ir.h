@@ -48,6 +48,7 @@ enum miga80_ir_opcode {
     MIGA80_IR_GT_U32,
     MIGA80_IR_GE_U32,
     MIGA80_IR_NORMALIZE_INTEGER,
+    MIGA80_IR_CALL_PSET,
     MIGA80_IR_BRANCH_FALSE,
     MIGA80_IR_JUMP,
     MIGA80_IR_RETURN
@@ -84,6 +85,11 @@ struct miga80_ir_function {
     struct miga80_constant_pool pool;
 };
 
+struct miga80_ir_runtime {
+    void *context;
+    int (*pset)(void *context, uint32_t x, uint32_t y, uint32_t color);
+};
+
 int miga80_lower_function(const struct miga80_ast_function *ast,
                           struct miga80_ir_function *ir,
                           struct miga80_diagnostic *diagnostic);
@@ -93,5 +99,10 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
                        const uint32_t *arguments, unsigned int argument_count,
                        uint32_t *result,
                        struct miga80_diagnostic *diagnostic);
+int miga80_evaluate_ir_with_runtime(
+    const struct miga80_ir_function *ir, const uint32_t *arguments,
+    unsigned int argument_count, uint32_t *result,
+    const struct miga80_ir_runtime *runtime,
+    struct miga80_diagnostic *diagnostic);
 
 #endif

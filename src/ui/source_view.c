@@ -128,16 +128,48 @@ static enum Miga80SourceViewStatus validate_source(
     return MIGA80_SOURCE_VIEW_OK;
 }
 
-enum Miga80SourceViewStatus miga80_source_view_render(
+enum Miga80SourceViewStatus miga80_source_view_draw_status(
+    uint8_t *pixels, size_t stride, const char *status_text)
+{
+    size_t length;
+    size_t index;
+
+    if (pixels == NULL || status_text == NULL) {
+        return MIGA80_SOURCE_VIEW_INVALID_ARGUMENT;
+    }
+    if (stride < MIGA80_SOURCE_VIEW_WIDTH) {
+        return MIGA80_SOURCE_VIEW_INVALID_STRIDE;
+    }
+    length = strlen(status_text);
+    if (length > MIGA80_SOURCE_VIEW_COLUMNS) {
+        return MIGA80_SOURCE_VIEW_LINE_TOO_LONG;
+    }
+    for (index = 0U; index < length; ++index) {
+        const unsigned char character = (unsigned char)status_text[index];
+
+        if (character < 0x20U || character > 0x7eU) {
+            return MIGA80_SOURCE_VIEW_INVALID_CHARACTER;
+        }
+    }
+    fill_rows(pixels, stride,
+              MIGA80_SOURCE_VIEW_HEIGHT - MIGA80_FONT4X8_HEIGHT,
+              MIGA80_FONT4X8_HEIGHT, VIEW_COLOR_STATUS_BACKGROUND);
+    draw_text(pixels, stride, 0U, MIGA80_SOURCE_VIEW_ROWS - 1U,
+              status_text, length, VIEW_COLOR_STATUS_TEXT);
+    return MIGA80_SOURCE_VIEW_OK;
+}
+
+enum Miga80SourceViewStatus miga80_source_view_render_with_status(
     uint8_t *pixels, size_t stride, const char *source, size_t source_size,
-    struct Miga80SourceViewMetrics *metrics)
+    const char *status_text, struct Miga80SourceViewMetrics *metrics)
 {
     enum Miga80SourceViewStatus status;
     size_t index;
     size_t line_start = 0U;
     size_t row = 1U;
 
-    if (pixels == NULL || source == NULL || metrics == NULL) {
+    if (pixels == NULL || source == NULL || status_text == NULL ||
+        metrics == NULL) {
         return MIGA80_SOURCE_VIEW_INVALID_ARGUMENT;
     }
     if (stride < MIGA80_SOURCE_VIEW_WIDTH) {
@@ -170,10 +202,19 @@ enum Miga80SourceViewStatus miga80_source_view_render(
         }
     }
 
-    draw_text(pixels, stride, 0U, MIGA80_SOURCE_VIEW_ROWS - 1U,
-              view_status, sizeof(view_status) - 1U,
-              VIEW_COLOR_STATUS_TEXT);
+    status = miga80_source_view_draw_status(pixels, stride, status_text);
+    if (status != MIGA80_SOURCE_VIEW_OK) {
+        return status;
+    }
     metrics->framebuffer_checksum = miga80_source_view_checksum(
         pixels, stride * MIGA80_SOURCE_VIEW_HEIGHT);
     return MIGA80_SOURCE_VIEW_OK;
+}
+
+enum Miga80SourceViewStatus miga80_source_view_render(
+    uint8_t *pixels, size_t stride, const char *source, size_t source_size,
+    struct Miga80SourceViewMetrics *metrics)
+{
+    return miga80_source_view_render_with_status(
+        pixels, stride, source, source_size, view_status, metrics);
 }

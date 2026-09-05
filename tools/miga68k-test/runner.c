@@ -11,14 +11,21 @@
 
 #define ARRAY_COUNT(values) (sizeof(values) / sizeof((values)[0]))
 #define TRACE_CAPACITY 16U
-#define MAX_INSTRUCTIONS 4096U
-#define MAX_FIXTURE_SIZE ((size_t)(MIGA68K_CODE_END - MIGA68K_CODE_START))
+#define DEFAULT_INSTRUCTION_LIMIT 4096U
+#define PSET_INSTRUCTION_LIMIT 50000000U
+#define MAX_FIXTURE_SIZE \
+    ((size_t)(MIGA68K_CODE_END - MIGA68K_CODE_START - 8U))
 #define STACK_POISON UINT8_C(0xa5)
 #define STACK_GUARD_SIZE 16U
 #define TEST_STACK_TOP (MIGA68K_STACK_END - STACK_GUARD_SIZE)
 #define RETURN_SENTINEL (MIGA68K_CODE_END - 2U)
 #define FAULT_SENTINEL (MIGA68K_CODE_END - 4U)
+#define PSET_SENTINEL (MIGA68K_CODE_END - 6U)
 #define TEST_RUNTIME_CONTEXT MIGA68K_DATA_START
+#define TEST_PIXEL_BUFFER (MIGA68K_DATA_START + UINT32_C(0x100))
+#define TEST_PIXEL_WIDTH 256U
+#define TEST_PIXEL_HEIGHT 256U
+#define TEST_PIXEL_BYTES (TEST_PIXEL_WIDTH * TEST_PIXEL_HEIGHT)
 
 struct trace_buffer {
     uint32_t pcs[TRACE_CAPACITY];
@@ -70,6 +77,10 @@ static const uint8_t saved_register_clobber_code[] = {0x76, 0x00, 0x4e, 0x75};
 static struct trace_buffer *active_trace;
 static uint32_t active_stack_entry;
 static uint32_t active_stack_low;
+static unsigned int active_instruction_limit = DEFAULT_INSTRUCTION_LIMIT;
+static int active_pset_mode;
+static int active_pset_failed;
+static uint32_t active_pset_calls;
 
 static m68k_register_t musashi_register(enum miga80_abi_register reg)
 {
@@ -235,7 +246,13 @@ static int prepare_program(const char *name, const uint8_t *code,
                                       RETURN_SENTINEL) ||
         !miga68k_memory_host_write_u32(
             TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_FAULT_HANDLER_OFFSET,
-            FAULT_SENTINEL)) {
+            FAULT_SENTINEL) ||
+        !miga68k_memory_host_write_u32(
+            TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET,
+            PSET_SENTINEL) ||
+        !miga68k_memory_host_write_u32(
+            TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_PIXEL_BUFFER_OFFSET,
+            TEST_PIXEL_BUFFER)) {
         fprintf(stderr, "TEST: %s\nUnable to initialize virtual memory.\n",
                 name);
         return 0;
@@ -265,7 +282,7 @@ static enum stop_reason execute_program(struct trace_buffer *trace,
     active_stack_entry = m68k_get_reg(NULL, M68K_REG_A7);
     active_stack_low = active_stack_entry;
     *instruction_count = 0;
-    while (*instruction_count < MAX_INSTRUCTIONS) {
+    while (*instruction_count < active_instruction_limit) {
         const uint32_t pc = m68k_get_reg(NULL, M68K_REG_PC);
 
         if (pc == RETURN_SENTINEL) {
@@ -275,6 +292,35 @@ static enum stop_reason execute_program(struct trace_buffer *trace,
         if (pc == FAULT_SENTINEL) {
             finish_stack_measurement(stack_bytes);
             return STOP_RUNTIME_FAULT;
+        }
+        if (pc == PSET_SENTINEL && active_pset_mode) {
+            const uint32_t stack_pointer =
+                m68k_get_reg(NULL, M68K_REG_A7);
+            const uint32_t x = m68k_get_reg(NULL, M68K_REG_D0);
+            const uint32_t y = m68k_get_reg(NULL, M68K_REG_D1);
+            const uint32_t color = m68k_get_reg(NULL, M68K_REG_D2);
+            uint32_t return_address;
+
+            if (x >= TEST_PIXEL_WIDTH || y >= TEST_PIXEL_HEIGHT ||
+                color > 15U ||
+                !miga68k_memory_host_read_u32(stack_pointer,
+                                               &return_address) ||
+                !miga68k_memory_host_write_u8(
+                    TEST_PIXEL_BUFFER + y * TEST_PIXEL_WIDTH + x,
+                    (uint8_t)color)) {
+                active_pset_failed = 1;
+                finish_stack_measurement(stack_bytes);
+                return STOP_MEMORY_FAULT;
+            }
+            ++active_pset_calls;
+            m68k_set_reg(M68K_REG_D0, UINT32_C(0xdead0000));
+            m68k_set_reg(M68K_REG_D1, UINT32_C(0xdead0001));
+            m68k_set_reg(M68K_REG_D2, UINT32_C(0xdead0002));
+            m68k_set_reg(M68K_REG_A0, UINT32_C(0xdead0008));
+            m68k_set_reg(M68K_REG_A1, UINT32_C(0xdead0009));
+            m68k_set_reg(M68K_REG_A7, stack_pointer + 4U);
+            m68k_set_reg(M68K_REG_PC, return_address);
+            continue;
         }
         if (!miga68k_memory_is_executable(pc)) {
             finish_stack_measurement(stack_bytes);
@@ -452,7 +498,7 @@ static int run_instruction_limit_test(void)
     stop = execute_program(&trace, &instruction_count, NULL);
     active_trace = NULL;
     if (stop == STOP_INSTRUCTION_LIMIT &&
-        instruction_count == MAX_INSTRUCTIONS) {
+        instruction_count == DEFAULT_INSTRUCTION_LIMIT) {
         return 1;
     }
 
@@ -464,6 +510,64 @@ static int run_instruction_limit_test(void)
     print_registers();
     print_trace(&trace);
     return 0;
+}
+
+static int run_pset_program(uint32_t expected_checksum,
+                            uint32_t expected_calls,
+                            unsigned int *executed_instructions,
+                            unsigned int *maximum_stack_bytes)
+{
+    struct trace_buffer trace;
+    unsigned int instruction_count;
+    unsigned int stack_bytes = 0U;
+    enum stop_reason stop;
+    uint32_t checksum;
+    int passed;
+
+    (void)memset(&trace, 0, sizeof(trace));
+    if (!prepare_program("mandelbrot/direct-encoder", active_program_code,
+                         active_program_code_size, 0U, 0U, 0U) ||
+        !miga68k_memory_host_fill(TEST_PIXEL_BUFFER, TEST_PIXEL_BYTES, 0U)) {
+        return 0;
+    }
+    active_pset_mode = 1;
+    active_pset_failed = 0;
+    active_pset_calls = 0U;
+    active_instruction_limit = PSET_INSTRUCTION_LIMIT;
+    stop = execute_program(&trace, &instruction_count, &stack_bytes);
+    checksum = miga68k_memory_host_checksum(TEST_PIXEL_BUFFER,
+                                             TEST_PIXEL_BYTES);
+    passed = stop == STOP_RETURNED && !active_pset_failed &&
+             active_pset_calls == expected_calls &&
+             checksum == expected_checksum &&
+             m68k_get_reg(NULL, M68K_REG_A7) == TEST_STACK_TOP &&
+             preserved_registers_are_valid() &&
+             miga68k_memory_range_is(MIGA68K_STACK_START,
+                                     STACK_GUARD_SIZE, STACK_POISON) &&
+             miga68k_memory_range_is(TEST_STACK_TOP, STACK_GUARD_SIZE,
+                                     STACK_POISON);
+    if (executed_instructions != NULL) {
+        *executed_instructions = instruction_count;
+    }
+    if (maximum_stack_bytes != NULL) {
+        *maximum_stack_bytes = stack_bytes;
+    }
+    active_pset_mode = 0;
+    active_instruction_limit = DEFAULT_INSTRUCTION_LIMIT;
+    active_trace = NULL;
+    if (!passed) {
+        fprintf(stderr,
+                "TEST: mandelbrot/direct-encoder\n"
+                "RESULT: stop=%u pset_failed=%d calls=%u/%u "
+                "checksum=%08x/%08x instructions=%u stack_bytes=%u\n",
+                (unsigned int)stop, active_pset_failed,
+                (unsigned int)active_pset_calls, (unsigned int)expected_calls,
+                (unsigned int)checksum, (unsigned int)expected_checksum,
+                instruction_count, stack_bytes);
+        print_registers();
+        print_trace(&trace);
+    }
+    return passed;
 }
 
 static int run_saved_register_guard_test(void)
@@ -506,6 +610,33 @@ int main(int argc, char **argv)
     };
     struct test_case command_line_case;
     size_t index;
+
+    if (argc == 5 && strcmp(argv[1], "--pset") == 0) {
+        uint32_t expected_checksum;
+        uint32_t expected_calls;
+        unsigned int instruction_count;
+        unsigned int stack_bytes;
+
+        if (!load_program_image(argv[2]) ||
+            !parse_u32(argv[3], &expected_checksum) ||
+            !parse_u32(argv[4], &expected_calls)) {
+            fprintf(stderr, "Invalid --pset arguments.\n");
+            return 2;
+        }
+        m68k_init();
+        m68k_set_instr_hook_callback(instruction_hook);
+        if (!run_pset_program(expected_checksum, expected_calls,
+                              &instruction_count, &stack_bytes)) {
+            return 1;
+        }
+        printf("PASS  mandelbrot native framebuffer=%08x "
+               "pset_calls=%u instructions=%u code_bytes=%lu "
+               "stack_bytes=%u\n",
+               (unsigned int)expected_checksum,
+               (unsigned int)expected_calls, instruction_count,
+               (unsigned long)active_program_code_size, stack_bytes);
+        return 0;
+    }
 
     if (argc == 8 && strcmp(argv[1], "--case") == 0) {
         unsigned int instruction_count;
@@ -575,8 +706,9 @@ int main(int argc, char **argv)
                 "Usage: %s [mul_add.bin]\n"
                 "       %s --case image.bin name D0 D1 D2 expected\n"
                 "       %s --fault-case image.bin name D0 D1 D2 "
-                "fault line column\n",
-                argv[0], argv[0], argv[0]);
+                "fault line column\n"
+                "       %s --pset image.bin framebuffer-checksum calls\n",
+                argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     if (argc == 2 && !load_program_image(argv[1])) {

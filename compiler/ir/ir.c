@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MIGA80_MAX_EVALUATED_BLOCKS (MIGA80_MAX_BASIC_BLOCKS * 1024U)
+#define MIGA80_MAX_EVALUATED_BLOCKS (MIGA80_MAX_BASIC_BLOCKS * 131072U)
 
 static int fail(struct miga80_diagnostic *diagnostic, unsigned int line,
                 unsigned int column, const char *message)
@@ -430,6 +430,29 @@ static int lower_statement_list(struct lower_context *context,
                                   statement->column, context->diagnostic)) {
                 return 0;
             }
+        } else if (statement->kind == MIGA80_AST_CALL_PSET) {
+            unsigned int argument;
+
+            if (statement->argument_count != MIGA80_MAX_INTRINSIC_ARGUMENTS) {
+                return fail(context->diagnostic, statement->line,
+                            statement->column,
+                            "pset AST argument count is invalid");
+            }
+            for (argument = 0U;
+                 argument < MIGA80_MAX_INTRINSIC_ARGUMENTS; ++argument) {
+                if (!lower_node(context->ast,
+                                statement->arguments[argument],
+                                context->ir, context->diagnostic)) {
+                    return 0;
+                }
+            }
+            if (!emit_instruction(context->ir, MIGA80_IR_CALL_PSET,
+                                  MIGA80_TYPE_VOID,
+                                  MIGA80_MAX_INTRINSIC_ARGUMENTS,
+                                  statement->line, statement->column,
+                                  context->diagnostic)) {
+                return 0;
+            }
         } else if (statement->kind == MIGA80_AST_IF) {
             unsigned int then_block;
             unsigned int else_block;
@@ -618,8 +641,9 @@ static int lower_statement_list(struct lower_context *context,
             *current_block = MIGA80_INVALID_BLOCK;
         } else if (statement->kind == MIGA80_AST_RETURN) {
             if (statement->next_statement != MIGA80_INVALID_STATEMENT ||
-                !lower_node(context->ast, statement->expression, context->ir,
-                            context->diagnostic) ||
+                (context->ast->result_type != MIGA80_TYPE_VOID &&
+                 !lower_node(context->ast, statement->expression,
+                             context->ir, context->diagnostic)) ||
                 !emit_instruction(context->ir, MIGA80_IR_RETURN,
                                   context->ast->result_type, 0U,
                                   statement->line, statement->column,
@@ -899,6 +923,18 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             --stack_size;
             stack[stack_size - 1U] =
                 comparison ? MIGA80_TYPE_BOOL : operand_type;
+        } else if (instruction->opcode == MIGA80_IR_CALL_PSET) {
+            if (instruction->type != MIGA80_TYPE_VOID ||
+                instruction->operand != MIGA80_MAX_INTRINSIC_ARGUMENTS ||
+                stack_size != MIGA80_MAX_INTRINSIC_ARGUMENTS ||
+                stack[0] != MIGA80_TYPE_I32 ||
+                stack[1] != MIGA80_TYPE_I32 ||
+                stack[2] != MIGA80_TYPE_U8) {
+                return fail(diagnostic, instruction->line,
+                            instruction->column,
+                            "typed IR pset call has invalid arguments");
+            }
+            stack_size = 0U;
         } else if (instruction->opcode == MIGA80_IR_BRANCH_FALSE) {
             if (instruction->type != MIGA80_TYPE_BOOL ||
                 stack_size != 1U || stack[0] != MIGA80_TYPE_BOOL ||
@@ -917,8 +953,12 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                             instruction->column, "typed IR jump is invalid");
             }
         } else if (instruction->opcode == MIGA80_IR_RETURN) {
-            if (instruction->type != ir->result_type || stack_size != 1U ||
-                stack[0] != ir->result_type ||
+            const int valid_stack =
+                ir->result_type == MIGA80_TYPE_VOID
+                    ? stack_size == 0U
+                    : (stack_size == 1U && stack[0] == ir->result_type);
+
+            if (instruction->type != ir->result_type || !valid_stack ||
                 block->successor_count != 0U) {
                 return fail(diagnostic, instruction->line,
                             instruction->column,
@@ -968,7 +1008,8 @@ int miga80_validate_ir(const struct miga80_ir_function *ir,
         return fail(diagnostic, 0U, 0U,
                     "typed IR function exceeds bounded storage");
     }
-    if (!miga80_type_is_value(ir->result_type)) {
+    if (ir->result_type != MIGA80_TYPE_VOID &&
+        !miga80_type_is_value(ir->result_type)) {
         return fail(diagnostic, 0U, 0U,
                     "typed IR function has invalid result type");
     }
@@ -1058,10 +1099,11 @@ int miga80_validate_ir(const struct miga80_ir_function *ir,
     return 1;
 }
 
-int miga80_evaluate_ir(const struct miga80_ir_function *ir,
-                       const uint32_t *arguments, unsigned int argument_count,
-                       uint32_t *result,
-                       struct miga80_diagnostic *diagnostic)
+int miga80_evaluate_ir_with_runtime(
+    const struct miga80_ir_function *ir, const uint32_t *arguments,
+    unsigned int argument_count, uint32_t *result,
+    const struct miga80_ir_runtime *runtime,
+    struct miga80_diagnostic *diagnostic)
 {
     uint32_t stack[MIGA80_MAX_IR_STACK];
     uint32_t locals[MIGA80_MAX_LOCALS];
@@ -1300,8 +1342,23 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
                 current_block = block->successors[0];
                 transferred = 1;
                 break;
+            case MIGA80_IR_CALL_PSET:
+                {
+                    const uint32_t color = stack[--stack_size];
+                    const uint32_t y = stack[--stack_size];
+                    const uint32_t x = stack[--stack_size];
+
+                    if (runtime == NULL || runtime->pset == NULL ||
+                        !runtime->pset(runtime->context, x, y, color)) {
+                        return fail(diagnostic, instruction->line,
+                                    instruction->column,
+                                    "pset runtime service failed");
+                    }
+                }
+                break;
             case MIGA80_IR_RETURN:
-                *result = stack[0];
+                *result = ir->result_type == MIGA80_TYPE_VOID ? 0U
+                                                               : stack[0];
                 return 1;
             default:
                 return fail(diagnostic, instruction->line,
@@ -1317,4 +1374,13 @@ int miga80_evaluate_ir(const struct miga80_ir_function *ir,
                         "typed IR block has no control transfer");
         }
     }
+}
+
+int miga80_evaluate_ir(const struct miga80_ir_function *ir,
+                       const uint32_t *arguments, unsigned int argument_count,
+                       uint32_t *result,
+                       struct miga80_diagnostic *diagnostic)
+{
+    return miga80_evaluate_ir_with_runtime(
+        ir, arguments, argument_count, result, NULL, diagnostic);
 }

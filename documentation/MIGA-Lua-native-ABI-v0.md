@@ -82,10 +82,22 @@ and stack argument placement.
 
 Generated code preserves `A5` and may read its first long word at offset zero,
 which ABI 0.2 introduced as the non-null controlled-fault handler address.
-ABI 0.6 retains it unchanged. Remaining
-runtime-context fields and the service jump table require later versioned
-extensions. Addresses used by the Musashi harness are test configuration and
-are not ABI constants.
+ABI 0.6 retains it unchanged. The Mandelbrot vertical slice additionally
+defines the first compatible graphics-service profile:
+
+| Offset | Profile field |
+|---:|---|
+| `0` | Existing non-returning controlled-fault handler |
+| `4` | Trusted `pset` shim address |
+| `8` | Active 256 x 256 byte-per-pixel buffer, private to the shim |
+
+Code that does not use a graphics intrinsic still requires only the original
+four-byte core context. A function containing `pset` requires the twelve-byte
+graphics profile. Generated code reads the service address at `4(A5)` and
+calls it with `x`, `y`, and canonical `u8` color in `D0`, `D1`, and `D2`.
+The shim may clobber `D0-D2`, `A0-A1`, and condition codes and must preserve
+all other MIGA-80 callee-saved state. Addresses used by the Musashi harness
+are test configuration and are not ABI constants.
 
 ## Stack and frame contract
 
@@ -117,6 +129,11 @@ Multiple returns are excluded from language version 1. Address values other
 than immutable strings, stack arguments, varargs, general runtime-service IDs,
 and ordinary calls remain unavailable and require an explicit compatible
 extension or ABI version bump before compiler code may emit them.
+
+The Amiga C ABI is a separate boundary. The hosted runtime trampoline saves
+the C environment before installing `A5`; in particular, it preserves `D2`
+because GCC treats it as callee-saved even though generated MIGA-80 code may
+freely clobber it. It restores that state before returning to C.
 
 ## Controlled fault contract
 

@@ -129,6 +129,52 @@ int miga68k_memory_host_write_u32(uint32_t address, uint32_t value)
     return 1;
 }
 
+int miga68k_memory_host_read_u32(uint32_t address, uint32_t *value)
+{
+    if (value == NULL || !aligned(address, 4U) ||
+        !readable(address, 4U)) {
+        return 0;
+    }
+    *value = ((uint32_t)memory_bytes[address] << 24) |
+             ((uint32_t)memory_bytes[address + 1U] << 16) |
+             ((uint32_t)memory_bytes[address + 2U] << 8) |
+             (uint32_t)memory_bytes[address + 3U];
+    return 1;
+}
+
+int miga68k_memory_host_write_u8(uint32_t address, uint8_t value)
+{
+    if (!writable(address, 1U)) {
+        return 0;
+    }
+    memory_bytes[address] = value;
+    return 1;
+}
+
+int miga68k_memory_host_fill(uint32_t address, size_t size, uint8_t value)
+{
+    if (!writable(address, size)) {
+        return 0;
+    }
+    (void)memset(&memory_bytes[address], value, size);
+    return 1;
+}
+
+uint32_t miga68k_memory_host_checksum(uint32_t address, size_t size)
+{
+    uint32_t hash = UINT32_C(2166136261);
+    size_t index;
+
+    if (!readable(address, size)) {
+        return 0U;
+    }
+    for (index = 0U; index < size; ++index) {
+        hash ^= memory_bytes[address + index];
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
+}
+
 int miga68k_memory_range_is(uint32_t address, size_t size, uint8_t value)
 {
     size_t index;

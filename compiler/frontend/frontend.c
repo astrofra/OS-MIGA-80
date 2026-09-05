@@ -31,6 +31,7 @@ enum token_kind {
     TOKEN_FIX,
     TOKEN_STRING,
     TOKEN_SYMBOL,
+    TOKEN_VOID,
     TOKEN_TRUE,
     TOKEN_FALSE,
     TOKEN_LEFT_PAREN,
@@ -134,7 +135,7 @@ static void skip_trivia(struct lexer *lexer)
         const char character = peek(lexer, 0U);
 
         if (character == ' ' || character == '\t' || character == '\r' ||
-            character == '\n') {
+            character == '\n' || character == ';') {
             (void)advance(lexer);
         } else if (character == '-' && peek(lexer, 1U) == '-') {
             while (peek(lexer, 0U) != '\0' && peek(lexer, 0U) != '\n') {
@@ -217,6 +218,8 @@ static struct token next_token(struct lexer *lexer)
             token.kind = TOKEN_STRING;
         } else if (token_is_word(&token, "symbol")) {
             token.kind = TOKEN_SYMBOL;
+        } else if (token_is_word(&token, "void")) {
+            token.kind = TOKEN_VOID;
         } else if (token_is_word(&token, "true")) {
             token.kind = TOKEN_TRUE;
         } else if (token_is_word(&token, "false")) {
@@ -452,6 +455,8 @@ static const char *token_name(enum token_kind kind)
         return "'string'";
     case TOKEN_SYMBOL:
         return "'symbol'";
+    case TOKEN_VOID:
+        return "'void'";
     case TOKEN_TRUE:
         return "'true'";
     case TOKEN_FALSE:
@@ -825,6 +830,8 @@ const char *miga80_type_name(enum miga80_type type)
         return "string";
     case MIGA80_TYPE_SYMBOL:
         return "symbol";
+    case MIGA80_TYPE_VOID:
+        return "void";
     default:
         return "invalid";
     }
@@ -1154,6 +1161,11 @@ static int parse_type(struct parser *parser, enum miga80_type *type)
     }
     if (parser->current.kind == TOKEN_SYMBOL) {
         *type = MIGA80_TYPE_SYMBOL;
+        parser_advance(parser);
+        return 1;
+    }
+    if (parser->current.kind == TOKEN_VOID) {
+        *type = MIGA80_TYPE_VOID;
         parser_advance(parser);
         return 1;
     }
@@ -1734,6 +1746,15 @@ static unsigned int allocate_statement(
     statement->next_statement = MIGA80_INVALID_STATEMENT;
     statement->then_statement = MIGA80_INVALID_STATEMENT;
     statement->else_statement = MIGA80_INVALID_STATEMENT;
+    statement->argument_count = 0U;
+    {
+        unsigned int argument;
+
+        for (argument = 0U; argument < MIGA80_MAX_INTRINSIC_ARGUMENTS;
+             ++argument) {
+            statement->arguments[argument] = MIGA80_INVALID_NODE;
+        }
+    }
     return index;
 }
 
@@ -1900,6 +1921,60 @@ static unsigned int parse_assignment(struct parser *parser)
 static unsigned int parse_if_statement(struct parser *parser);
 static unsigned int parse_while_statement(struct parser *parser);
 
+static int current_identifier_is(const struct parser *parser,
+                                 const char *name)
+{
+    return parser->current.kind == TOKEN_IDENTIFIER &&
+           token_is_word(&parser->current, name);
+}
+
+static unsigned int parse_pset_statement(struct parser *parser)
+{
+    const struct token call = parser->current;
+    static const enum miga80_type argument_types[] = {
+        MIGA80_TYPE_I32, MIGA80_TYPE_I32, MIGA80_TYPE_U8
+    };
+    unsigned int statement_index;
+    unsigned int argument;
+    int arguments[MIGA80_MAX_INTRINSIC_ARGUMENTS];
+
+    parser_advance(parser);
+    if (!expect(parser, TOKEN_LEFT_PAREN)) {
+        return MIGA80_INVALID_STATEMENT;
+    }
+    for (argument = 0U; argument < MIGA80_MAX_INTRINSIC_ARGUMENTS;
+         ++argument) {
+        arguments[argument] = parse_expression(parser);
+        if (!require_type(parser, &arguments[argument],
+                          argument_types[argument], call.line, call.column,
+                          "pset argument")) {
+            return MIGA80_INVALID_STATEMENT;
+        }
+        if (argument + 1U < MIGA80_MAX_INTRINSIC_ARGUMENTS) {
+            if (!expect(parser, TOKEN_COMMA)) {
+                return MIGA80_INVALID_STATEMENT;
+            }
+        }
+    }
+    if (!expect(parser, TOKEN_RIGHT_PAREN)) {
+        return MIGA80_INVALID_STATEMENT;
+    }
+    statement_index = allocate_statement(
+        parser, MIGA80_AST_CALL_PSET, 0U, MIGA80_INVALID_NODE, call.line,
+        call.column);
+    if (statement_index == MIGA80_INVALID_STATEMENT) {
+        return MIGA80_INVALID_STATEMENT;
+    }
+    parser->function->statements[statement_index].argument_count =
+        MIGA80_MAX_INTRINSIC_ARGUMENTS;
+    for (argument = 0U; argument < MIGA80_MAX_INTRINSIC_ARGUMENTS;
+         ++argument) {
+        parser->function->statements[statement_index].arguments[argument] =
+            arguments[argument];
+    }
+    return statement_index;
+}
+
 static unsigned int parse_loop_control_statement(struct parser *parser)
 {
     const struct token control = parser->current;
@@ -1943,6 +2018,8 @@ static int parse_control_statement_list(struct parser *parser,
         } else if (parser->current.kind == TOKEN_BREAK ||
                    parser->current.kind == TOKEN_CONTINUE) {
             statement = parse_loop_control_statement(parser);
+        } else if (current_identifier_is(parser, "pset")) {
+            statement = parse_pset_statement(parser);
         } else {
             statement = parse_assignment(parser);
         }
@@ -2095,7 +2172,8 @@ int miga80_parse_function(const char *source, size_t source_size,
         !parse_type(&parser, &function->result_type)) {
         return 0;
     }
-    if (!require_bootstrap_value_type(
+    if (function->result_type != MIGA80_TYPE_VOID &&
+        !require_bootstrap_value_type(
             &parser, function->result_type, function_name.line,
             function_name.column)) {
         return 0;
@@ -2115,6 +2193,8 @@ int miga80_parse_function(const char *source, size_t source_size,
         } else if (parser.current.kind == TOKEN_BREAK ||
                    parser.current.kind == TOKEN_CONTINUE) {
             statement = parse_loop_control_statement(&parser);
+        } else if (current_identifier_is(&parser, "pset")) {
+            statement = parse_pset_statement(&parser);
         } else {
             statement = parse_assignment(&parser);
         }
@@ -2122,7 +2202,21 @@ int miga80_parse_function(const char *source, size_t source_size,
             return 0;
         }
     }
-    {
+    if (function->result_type == MIGA80_TYPE_VOID) {
+        const struct token return_token = parser.current;
+
+        if (parser.current.kind == TOKEN_RETURN) {
+            parser_advance(&parser);
+        }
+        function->result = MIGA80_INVALID_NODE;
+        if (!append_statement(
+                &parser, &body,
+                allocate_statement(&parser, MIGA80_AST_RETURN, 0U,
+                                   MIGA80_INVALID_NODE,
+                                   return_token.line, return_token.column))) {
+            return 0;
+        }
+    } else {
         const struct token return_token = parser.current;
 
         if (!expect(&parser, TOKEN_RETURN)) {
@@ -2145,5 +2239,6 @@ int miga80_parse_function(const char *source, size_t source_size,
         return 0;
     }
     function->first_statement = body.first;
-    return function->result != MIGA80_INVALID_NODE;
+    return function->result_type == MIGA80_TYPE_VOID ||
+           function->result != MIGA80_INVALID_NODE;
 }

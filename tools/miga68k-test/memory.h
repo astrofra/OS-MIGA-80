@@ -17,6 +17,10 @@ void miga68k_memory_reset(uint8_t poison);
 int miga68k_memory_load_code(uint32_t address, const uint8_t *data,
                              size_t size);
 int miga68k_memory_host_write_u32(uint32_t address, uint32_t value);
+int miga68k_memory_host_read_u32(uint32_t address, uint32_t *value);
+int miga68k_memory_host_write_u8(uint32_t address, uint8_t value);
+int miga68k_memory_host_fill(uint32_t address, size_t size, uint8_t value);
+uint32_t miga68k_memory_host_checksum(uint32_t address, size_t size);
 int miga68k_memory_range_is(uint32_t address, size_t size, uint8_t value);
 int miga68k_memory_is_executable(uint32_t address);
 int miga68k_memory_has_fault(void);

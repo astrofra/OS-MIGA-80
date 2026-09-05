@@ -32,6 +32,11 @@ struct Miga80SourceViewMetrics {
 enum Miga80SourceViewStatus miga80_source_view_render(
     uint8_t *pixels, size_t stride, const char *source, size_t source_size,
     struct Miga80SourceViewMetrics *metrics);
+enum Miga80SourceViewStatus miga80_source_view_render_with_status(
+    uint8_t *pixels, size_t stride, const char *source, size_t source_size,
+    const char *status_text, struct Miga80SourceViewMetrics *metrics);
+enum Miga80SourceViewStatus miga80_source_view_draw_status(
+    uint8_t *pixels, size_t stride, const char *status_text);
 
 uint32_t miga80_source_view_checksum(const void *bytes, size_t size);
 

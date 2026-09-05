@@ -1,7 +1,7 @@
 # MIGA-80 Mandelbrot Vertical Slice
 
-**Status:** Source-view checkpoint implemented and passing under FS-UAE;
-on-target compilation and execution remain in progress
+**Status:** First complete F5 path implemented and passing under Musashi and
+FS-UAE; O1 direct emission and full runtime guards remain in progress
 
 **Date:** 2026-09-05
 
@@ -107,8 +107,11 @@ oracle. It may never be used as the displayed runtime result.
 - a claim about stock-A1200 frame rate derived from Musashi or FS-UAE timing;
 - freezing the complete MIGA-80 version 1 default palette or font repertoire.
 
-The demo uses the compiler's default `-O1` value-IR path. `-O0` remains an
-oracle and diagnostic path, not a user-visible option.
+The first executable checkpoint uses the bounded stack-oriented `-O0` IR as
+its direct-encoder source. This keeps the first native proof small and makes it
+directly comparable with the existing assembly oracle. It is not the final
+performance configuration: moving direct emission to the call-aware `-O1`
+value-IR register plan is the next compiler tranche.
 
 ## 5. Existing Foundations and Missing Links
 
@@ -142,6 +145,13 @@ The viewer and compiler consume the same bounded byte buffer loaded from the
 ADF. The UI does not maintain a separately reformatted source copy. This avoids
 the possibility of compiling text different from the text presented to the
 user.
+
+The source UI is composited in playfield 1 (the odd AGA bitplanes). Its
+four-bit colour number therefore addresses palette entries 0 through 15
+directly; colour zero reveals the playfield-2/backdrop colour. This explicit
+placement avoids depending on the configurable playfield-2 colour-bank offset
+for the editor and leaves the same foreground playfield ready for generated
+`pset` output.
 
 An optional semicolon is accepted as a Lua-compatible statement separator.
 This small grammar addition allows two short declarations or assignments on
@@ -241,11 +251,14 @@ Semantics:
 
 - `x` and `y` are coordinates in the full 256 x 256 logical display, with the
   origin at the top left;
-- drawing outside the active `PIXEL` viewport is clipped and has no effect;
+- drawing outside the 256 x 256 logical `PIXEL` playfield is clipped and has
+  no effect; the bundled script deliberately confines itself to the central
+  160 x 128 demonstration viewport;
 - color `0` is transparent and colors `1` through `15` select the opaque
   `PIXEL` palette;
-- a color above `15` is a controlled graphics-argument fault, not an implicit
-  mask or conversion;
+- a color above `15` is rejected by the bootstrap service and has no effect;
+  routing this case through the controlled fault mechanism remains follow-up
+  runtime work;
 - a successful call updates the byte-per-pixel chunky source and marks the
   viewport dirty;
 - `pset` does not run C2P and does not publish planes on every call.
@@ -401,10 +414,13 @@ Implemented build targets are:
 
 ```sh
 gmake source-view-test
+gmake compiler-encoder-test
+gmake compiler-encoder-musashi-test
 gmake miga80-demo-inspect
 gmake miga80-demo-adf
 gmake miga80-demo-adf-inspect
 gmake miga80-demo-adf-fs-uae
+gmake miga80-demo-adf-fs-uae-autorun
 ```
 
 The image contains:
@@ -423,12 +439,12 @@ manifest records raw size, filesystem listing, and executable, source, font,
 and complete-ADF checksums. The payload must remain within the existing
 800 KiB planning budget.
 
-The source-view checkpoint waits for `Esc` after drawing the source. `F5` is
-shown in the status row but is intentionally inactive until the callable
-compiler tranche lands. After drawing and AGA readback, the hosted program
-writes a bounded `BOOTED.TXT` report. The FS-UAE test boots a writable copy of
-the exact production ADF, waits for that report, verifies its checksums, and
-then stops the emulator while the source screen is still open.
+The application waits for `F5` or `Esc` after drawing the source. `F5` presents
+parse, typed-IR lowering, and direct-encoding states, executes the generated
+function, and leaves its Mandelbrot output visible. `Esc` returns to the source
+from result/error and exits from the source state. An `AUTORUN` command-line
+argument exists only to let the FS-UAE harness exercise the same path without
+synthesizing host keyboard input.
 
 ### 13.1 Implemented source-view checkpoint
 
@@ -446,6 +462,31 @@ The 2026-09-05 Kickstart 3.0 FS-UAE run passes with:
 The raw DD ADF remains exactly 901,120 bytes regardless of used blocks. Its
 SHA-256 is recorded in the adjacent generated manifest and may change when
 timestamps or any packaged input change.
+
+### 13.2 Implemented native-execution checkpoint
+
+The 2026-09-05 automated A1200 FS-UAE run now also proves:
+
+- successful on-target parsing of 73 AST nodes and 28 statements;
+- lowering to 112 typed-IR instructions in 17 basic blocks;
+- direct emission of 744 bytes of position-independent 68020 code, checksum
+  `69f4c1eb`, without an assembler or linker on the ADF;
+- instruction-cache synchronization followed by execution through `A5` and
+  the private `pset` service;
+- a canonical result checksum of `c4604fc7`, identical to the typed-IR
+  evaluator, the direct image under Musashi, and the GNU-assembly oracle under
+  Musashi;
+- 20,480 observable `pset` calls in both Musashi paths;
+- a 53,360-byte Hunk executable with 45,652 text bytes, 548 data bytes, and
+  5,000 BSS bytes;
+- 130 occupied OFS blocks, reported as 65 KiB including filesystem overhead.
+
+The first integration run also exposed an ABI-bridge defect: generated code
+correctly treated `D2` as caller-saved under the MIGA-80 ABI, while the Amiga C
+caller kept the framebuffer pointer in its callee-saved `D2`. The trampoline
+now preserves `D2` when crossing from the Amiga C ABI into generated code and
+restores it before returning to C. The target checksum regression covers this
+boundary.
 
 ## 14. Validation Matrix
 
@@ -520,12 +561,16 @@ physical-hardware release gates.
 1. **Completed 2026-09-05 -- visible shell:** reusable hosted screen, input
    state, checked font importer, source raster, palette, default source file,
    boot report, and bootable ADF.
-2. **Callable compiler:** `void`, semicolons, typed `pset`, call IR,
-   call-aware liveness, runtime-context ABI extension, and Musashi mock.
-3. **Direct code:** shared instruction form, checked encoder, metadata,
-   target executable allocation, cache synchronization, and trampoline.
-4. **Integrated Mandelbrot:** byte-per-pixel viewport, one-shot C2P/publication,
-   diagnostics, budgets, checksums, and repeated-state testing.
+2. **Partly completed -- callable compiler:** `void`, semicolons, typed `pset`,
+   stack IR, runtime-context service, and Musashi mock are implemented;
+   call-aware value-IR liveness remains.
+3. **Partly completed -- direct code:** the checked O0 encoder, target
+   executable allocation, cache synchronization, and C/ABI trampoline are
+   implemented; the shared O1 instruction form and complete guards remain.
+4. **Partly completed -- integrated Mandelbrot:** byte-per-pixel rendering,
+   one-shot C2P/publication, checksums, and source/result states are
+   implemented; budgets, forced-fault coverage, and repeated-state automation
+   remain.
 5. **Release proof:** automated FS-UAE boot, reproducible ADF/manifest, then
    timing and visual review on a stock PAL A1200.
 

@@ -6,12 +6,14 @@ MIGA80_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIGA80_LOCAL_CONFIG="${MIGA80_LOCAL_CONFIG:-$MIGA80_PROJECT_ROOT/config/fs-uae/local.env}"
 MIGA80_SOURCE_ADF="${1:-$MIGA80_PROJECT_ROOT/build/distribution/miga80-source-view.adf}"
 MIGA80_EXPECTED="${2:-$MIGA80_PROJECT_ROOT/tests/smoke/source-view-adf/expected.txt}"
+MIGA80_MODE="${3:-SOURCE}"
 MIGA80_RUN_DIR="$MIGA80_PROJECT_ROOT/build/fs-uae-demo-adf"
 MIGA80_RUN_ADF="$MIGA80_RUN_DIR/miga80-source-view-run.adf"
 MIGA80_SNAPSHOT_ADF="$MIGA80_RUN_DIR/poll-snapshot.adf"
 MIGA80_CONFIG="$MIGA80_RUN_DIR/a1200-pal-source-view.fs-uae"
 MIGA80_REPORT="$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-fs-uae.txt"
 MIGA80_CANDIDATE_REPORT="$MIGA80_RUN_DIR/candidate-report.txt"
+MIGA80_AUTORUN_STARTUP="$MIGA80_RUN_DIR/Startup-Sequence.autorun"
 MIGA80_TIMEOUT_SECONDS="${MIGA80_FS_UAE_TIMEOUT_SECONDS:-45}"
 MIGA80_EMULATOR_PID=""
 
@@ -86,6 +88,23 @@ fi
 /bin/rm -f "$MIGA80_REPORT" "$MIGA80_CANDIDATE_REPORT" \
   "$MIGA80_SNAPSHOT_ADF"
 
+case "$MIGA80_MODE" in
+  SOURCE)
+    ;;
+  AUTORUN)
+    printf '%s\n' \
+      'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT AUTORUN' \
+      >"$MIGA80_AUTORUN_STARTUP"
+    xdftool -f "$MIGA80_RUN_ADF" \
+      delete S/Startup-Sequence + \
+      write "$MIGA80_AUTORUN_STARTUP" S/Startup-Sequence >/dev/null
+    ;;
+  *)
+    printf 'Unknown source-view test mode: %s\n' "$MIGA80_MODE" >&2
+    exit 1
+    ;;
+esac
+
 {
   printf '[fs-uae]\n'
   printf 'amiga_model = A1200\n'
@@ -109,10 +128,18 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
   /bin/sleep 1
   /bin/cp "$MIGA80_RUN_ADF" "$MIGA80_SNAPSHOT_ADF"
   if xdftool "$MIGA80_SNAPSHOT_ADF" type BOOTED.TXT \
-       >"$MIGA80_CANDIDATE_REPORT" 2>/dev/null &&
-     /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
-       /usr/bin/grep -Eq '^result=(pass|fail)$'; then
-    break
+       >"$MIGA80_CANDIDATE_REPORT" 2>/dev/null; then
+    if [ "$MIGA80_MODE" = AUTORUN ]; then
+      if /usr/bin/grep -q '^miga80_source_view_report=2$' \
+           "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
+           /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
+    elif /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
+         /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+      break
+    fi
   fi
 done
 
@@ -135,3 +162,6 @@ fi
 
 printf 'PASS  standalone MIGA-80 ADF booted and opened the source view\n'
 printf 'PASS  AGA readback matches the canonical 4x8 source framebuffer\n'
+if [ "$MIGA80_MODE" = AUTORUN ]; then
+  printf 'PASS  on-target source compilation and native execution completed\n'
+fi
