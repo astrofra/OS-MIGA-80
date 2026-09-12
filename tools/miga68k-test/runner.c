@@ -26,6 +26,8 @@
 #define TEST_PIXEL_WIDTH 256U
 #define TEST_PIXEL_HEIGHT 256U
 #define TEST_PIXEL_BYTES (TEST_PIXEL_WIDTH * TEST_PIXEL_HEIGHT)
+#define RUNTIME_STACK_BOTTOM (MIGA68K_STACK_START + UINT32_C(0x1000))
+#define RUNTIME_STACK_TOP (RUNTIME_STACK_BOTTOM + UINT32_C(0x1000))
 
 struct trace_buffer {
     uint32_t pcs[TRACE_CAPACITY];
@@ -570,6 +572,103 @@ static int run_pset_program(uint32_t expected_checksum,
     return passed;
 }
 
+static int run_runtime_case(const char *name, uint32_t budget,
+                             uint32_t fault, uint32_t line, uint32_t column,
+                             uint32_t remaining, uint32_t framebuffer)
+{
+    struct trace_buffer trace;
+    unsigned int instructions;
+    enum stop_reason stop;
+    uint32_t actual_fault = 0U, actual_line = 0U, actual_column = 0U;
+    uint32_t actual_remaining = 0U;
+    int passed;
+
+    (void)memset(&trace, 0, sizeof(trace));
+    if (!prepare_program(name, active_program_code, active_program_code_size,
+                           0U, 0U, UINT32_C(0xd2d2d2d2)) ||
+        !miga68k_memory_host_fill(TEST_PIXEL_BUFFER, TEST_PIXEL_BYTES, 0U) ||
+        !miga68k_memory_host_write_u32(
+            TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_BUDGET_OFFSET, budget) ||
+        !miga68k_memory_host_write_u32(
+            TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_STACK_TOP_OFFSET,
+            RUNTIME_STACK_TOP)) {
+        return 0;
+    }
+    active_instruction_limit = PSET_INSTRUCTION_LIMIT;
+    stop = execute_program(&trace, &instructions, NULL);
+    active_instruction_limit = DEFAULT_INSTRUCTION_LIMIT;
+    passed = miga68k_memory_host_read_u32(
+                 TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_FAULT_CODE_OFFSET,
+                 &actual_fault) &&
+             miga68k_memory_host_read_u32(
+                 TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_FAULT_LINE_OFFSET,
+                 &actual_line) &&
+             miga68k_memory_host_read_u32(
+                 TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_FAULT_COLUMN_OFFSET,
+                 &actual_column) &&
+             miga68k_memory_host_read_u32(
+                 TEST_RUNTIME_CONTEXT + MIGA80_ABI_RUNTIME_BUDGET_OFFSET,
+                 &actual_remaining);
+    passed = passed && stop == STOP_RETURNED &&
+             actual_fault == fault && actual_line == line &&
+             actual_column == column && actual_remaining == remaining &&
+             m68k_get_reg(NULL, M68K_REG_D0) == fault &&
+             m68k_get_reg(NULL, M68K_REG_D2) == UINT32_C(0xd2d2d2d2) &&
+             m68k_get_reg(NULL, M68K_REG_A7) == TEST_STACK_TOP &&
+             preserved_registers_are_valid() &&
+             miga68k_memory_host_checksum(TEST_PIXEL_BUFFER,
+                                          TEST_PIXEL_BYTES) == framebuffer &&
+             miga68k_memory_range_is(RUNTIME_STACK_BOTTOM - STACK_GUARD_SIZE,
+                                      STACK_GUARD_SIZE, STACK_POISON) &&
+             miga68k_memory_range_is(RUNTIME_STACK_TOP, STACK_GUARD_SIZE,
+                                      STACK_POISON) &&
+             miga68k_memory_range_is(TEST_STACK_TOP, STACK_GUARD_SIZE,
+                                      STACK_POISON);
+    if (!passed) {
+        fprintf(stderr, "TEST: %s stop=%u instructions=%u\n", name,
+                 (unsigned int)stop, instructions);
+        fprintf(stderr, "fault=%u source=%u:%u remaining=%u framebuffer=%08x\n",
+                 actual_fault, actual_line, actual_column, actual_remaining,
+                 miga68k_memory_host_checksum(TEST_PIXEL_BUFFER,
+                                               TEST_PIXEL_BYTES));
+        print_registers();
+        print_trace(&trace);
+    } else {
+        printf("PASS  %s fault=%u source=%u:%u budget_remaining=%u "
+               "framebuffer=%08x host_restore=pass stack_guards=pass\n",
+               name, fault, line, column, remaining, framebuffer);
+    }
+    active_trace = NULL;
+    return passed;
+}
+
+static int run_pset_case(const struct test_case *test,
+                         uint32_t expected_calls,
+                         unsigned int *executed_instructions,
+                         unsigned int *maximum_stack_bytes)
+{
+    int passed;
+
+    active_pset_mode = 1;
+    active_pset_failed = 0;
+    active_pset_calls = 0U;
+    active_instruction_limit = PSET_INSTRUCTION_LIMIT;
+    passed = run_case(test, executed_instructions, maximum_stack_bytes);
+    active_pset_mode = 0;
+    active_instruction_limit = DEFAULT_INSTRUCTION_LIMIT;
+
+    if (passed && (active_pset_failed ||
+                   active_pset_calls != expected_calls)) {
+        fprintf(stderr,
+                "TEST: %s\nRESULT: pset_failed=%d calls=%u/%u\n",
+                test->name, active_pset_failed,
+                (unsigned int)active_pset_calls,
+                (unsigned int)expected_calls);
+        passed = 0;
+    }
+    return passed;
+}
+
 static int run_saved_register_guard_test(void)
 {
     struct trace_buffer trace;
@@ -611,6 +710,22 @@ int main(int argc, char **argv)
     struct test_case command_line_case;
     size_t index;
 
+    if (argc == 10 && strcmp(argv[1], "--runtime") == 0) {
+        uint32_t values[6];
+
+        if (!load_program_image(argv[2])) {
+            return 2;
+        }
+        for (index = 0U; index < 6U; ++index) {
+            if (!parse_u32(argv[index + 4U], &values[index])) {
+                return 2;
+            }
+        }
+        m68k_init();
+        m68k_set_instr_hook_callback(instruction_hook);
+        return run_runtime_case(argv[3], values[0], values[1], values[2],
+                                  values[3], values[4], values[5]) ? 0 : 1;
+    }
     if (argc == 5 && strcmp(argv[1], "--pset") == 0) {
         uint32_t expected_checksum;
         uint32_t expected_calls;
@@ -665,6 +780,36 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (argc == 9 && strcmp(argv[1], "--pset-case") == 0) {
+        unsigned int instruction_count;
+        unsigned int stack_bytes;
+        uint32_t expected_calls;
+
+        command_line_case.name = argv[3];
+        if (!load_program_image(argv[2]) ||
+            !parse_u32(argv[4], &command_line_case.a) ||
+            !parse_u32(argv[5], &command_line_case.b) ||
+            !parse_u32(argv[6], &command_line_case.c) ||
+            !parse_u32(argv[7], &command_line_case.expected) ||
+            !parse_u32(argv[8], &expected_calls)) {
+            fprintf(stderr, "Invalid --pset-case arguments.\n");
+            return 2;
+        }
+        m68k_init();
+        m68k_set_instr_hook_callback(instruction_hook);
+        if (!run_pset_case(&command_line_case, expected_calls,
+                           &instruction_count, &stack_bytes)) {
+            return 1;
+        }
+        printf("PASS  %s D0=%08x pset_calls=%u instructions=%u "
+               "code_bytes=%lu stack_bytes=%u\n",
+               command_line_case.name,
+               (unsigned int)command_line_case.expected,
+               (unsigned int)expected_calls, instruction_count,
+               (unsigned long)active_program_code_size, stack_bytes);
+        return 0;
+    }
+
     if (argc == 10 && strcmp(argv[1], "--fault-case") == 0) {
         unsigned int instruction_count;
         unsigned int stack_bytes;
@@ -701,14 +846,17 @@ int main(int argc, char **argv)
 
     if (argc > 2 ||
         (argc == 2 && (strcmp(argv[1], "--case") == 0 ||
-                       strcmp(argv[1], "--fault-case") == 0))) {
+                       strcmp(argv[1], "--fault-case") == 0 ||
+                       strcmp(argv[1], "--pset-case") == 0))) {
         fprintf(stderr,
                 "Usage: %s [mul_add.bin]\n"
                 "       %s --case image.bin name D0 D1 D2 expected\n"
                 "       %s --fault-case image.bin name D0 D1 D2 "
                 "fault line column\n"
+                "       %s --pset-case image.bin name D0 D1 D2 "
+                "expected calls\n"
                 "       %s --pset image.bin framebuffer-checksum calls\n",
-                argv[0], argv[0], argv[0], argv[0]);
+                argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     if (argc == 2 && !load_program_image(argv[1])) {

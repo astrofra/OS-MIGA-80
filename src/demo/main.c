@@ -24,9 +24,11 @@
 #include <utility/tagitem.h>
 
 #include "graphics/c2p_reference.h"
+#include "compiler/abi/runtime.h"
 #include "compiler/backend_m68k/encoder.h"
 #include "compiler/frontend/frontend.h"
 #include "compiler/ir/ir.h"
+#include "compiler/value_ir/value_ir.h"
 #include "ui/palette.h"
 #include "ui/source_view.h"
 
@@ -38,6 +40,19 @@
 #define DEMO_CHUNKY_BYTES (DEMO_SCREEN_WIDTH * DEMO_SCREEN_HEIGHT)
 #define DEMO_SOURCE_CAPACITY 4096U
 #define DEMO_CODE_CAPACITY 4096U
+#define DEMO_COMPILER_STACK_BYTES 32768U
+#define DEMO_RUNTIME_STACK_BYTES 4096U
+#define DEMO_RUNTIME_STACK_TOTAL_BYTES \
+    (DEMO_RUNTIME_STACK_BYTES + 2U * DEMO_STACK_GUARD_BYTES)
+#define DEMO_EXECUTION_BUDGET 1000000U
+#define DEMO_STACK_BOUNDARY_RESERVE_BYTES 256U
+#define DEMO_STACK_GUARD_BYTES 256U
+#define DEMO_COMPILER_STACK_TOTAL_BYTES \
+    (DEMO_COMPILER_STACK_BYTES + \
+     (2U * DEMO_STACK_BOUNDARY_RESERVE_BYTES) + \
+     (2U * DEMO_STACK_GUARD_BYTES))
+#define DEMO_STACK_LOWER_GUARD 0x5aU
+#define DEMO_STACK_UPPER_GUARD 0xa5U
 #define DEMO_DEFAULT_SOURCE "MIGA80:DATA/DEFAULT.LUA"
 #define DEMO_DEFAULT_REPORT "MIGA80:BOOTED.TXT"
 #define DEMO_RAWKEY_ESCAPE 0x45U
@@ -49,9 +64,38 @@ struct IntuitionBase *IntuitionBase = NULL;
 static char source_buffer[DEMO_SOURCE_CAPACITY + 1U];
 static ULONG amiga_palette[1U + (DEMO_PALETTE_COLORS * 3U) + 1U];
 static ULONG palette_readback[DEMO_PALETTE_COLORS * 3U];
+static UBYTE *compiler_stack_allocation;
+static struct StackSwapStruct compiler_stack_swap;
 
-extern void miga80_execute_generated(APTR code, APTR runtime_context);
+struct demo_compile_request {
+    struct Screen *screen;
+    uint8_t *chunky;
+    const struct Miga80SourceViewMetrics *metrics;
+    const char *report_path;
+    char *error_status;
+    size_t error_capacity;
+};
+
+static struct demo_compile_request compiler_request;
+static int compiler_run_result;
+static struct miga80_runtime_context last_runtime;
+static uint32_t last_framebuffer_checksum;
+static uint32_t execution_budget = DEMO_EXECUTION_BUDGET;
+static int force_runtime_fault;
+static const char *last_failure;
+
+typedef char runtime_context_layout_check[
+    sizeof(struct miga80_runtime_context) ==
+            MIGA80_ABI_RUNTIME_GUARDED_CONTEXT_SIZE &&
+    offsetof(struct miga80_runtime_context, budget) ==
+            MIGA80_ABI_RUNTIME_BUDGET_OFFSET &&
+    offsetof(struct miga80_runtime_context, fault_column) ==
+            MIGA80_ABI_RUNTIME_FAULT_COLUMN_OFFSET ? 1 : -1];
+
+extern ULONG miga80_execute_generated(APTR code, APTR runtime_context);
 extern void miga80_runtime_pset(void);
+extern void miga80_runtime_fault(void);
+extern void miga80_runtime_test_fault(void);
 
 static size_t text_length(const char *text)
 {
@@ -61,6 +105,75 @@ static size_t text_length(const char *text)
         ++end;
     }
     return (size_t)(end - text);
+}
+
+static int region_has_value(const UBYTE *region, size_t size, UBYTE value)
+{
+    size_t index;
+
+    for (index = 0U; index < size; ++index) {
+        if (region[index] != value) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int compiler_stack_guards_intact(void)
+{
+    const UBYTE *upper_guard;
+
+    if (compiler_stack_allocation == NULL) {
+        return 0;
+    }
+    upper_guard = compiler_stack_allocation + DEMO_STACK_GUARD_BYTES +
+                  DEMO_STACK_BOUNDARY_RESERVE_BYTES +
+                  DEMO_COMPILER_STACK_BYTES +
+                  DEMO_STACK_BOUNDARY_RESERVE_BYTES;
+
+    return region_has_value(compiler_stack_allocation,
+                            DEMO_STACK_GUARD_BYTES,
+                            DEMO_STACK_LOWER_GUARD) &&
+           region_has_value(upper_guard, DEMO_STACK_GUARD_BYTES,
+                            DEMO_STACK_UPPER_GUARD);
+}
+
+static int prepare_compiler_stack(void)
+{
+    UBYTE *usable;
+
+    compiler_stack_allocation = (UBYTE *)AllocMem(
+        DEMO_COMPILER_STACK_TOTAL_BYTES, MEMF_PUBLIC);
+    if (compiler_stack_allocation == NULL) {
+        return 0;
+    }
+    (void)memset(compiler_stack_allocation, DEMO_STACK_LOWER_GUARD,
+                 DEMO_STACK_GUARD_BYTES);
+    (void)memset(compiler_stack_allocation + DEMO_STACK_GUARD_BYTES, 0xcd,
+                 DEMO_COMPILER_STACK_BYTES +
+                     (2U * DEMO_STACK_BOUNDARY_RESERVE_BYTES));
+    usable = compiler_stack_allocation + DEMO_STACK_GUARD_BYTES +
+             DEMO_STACK_BOUNDARY_RESERVE_BYTES;
+    (void)memset(usable + DEMO_COMPILER_STACK_BYTES +
+                     DEMO_STACK_BOUNDARY_RESERVE_BYTES,
+                 DEMO_STACK_UPPER_GUARD, DEMO_STACK_GUARD_BYTES);
+    compiler_stack_swap.stk_Lower =
+        usable - DEMO_STACK_BOUNDARY_RESERVE_BYTES;
+    compiler_stack_swap.stk_Upper =
+        (ULONG)(uintptr_t)(usable + DEMO_COMPILER_STACK_BYTES +
+                           DEMO_STACK_BOUNDARY_RESERVE_BYTES);
+    compiler_stack_swap.stk_Pointer =
+        (APTR)(uintptr_t)(usable + DEMO_COMPILER_STACK_BYTES);
+    return 1;
+}
+
+static void release_compiler_stack(void)
+{
+    if (compiler_stack_allocation != NULL) {
+        FreeMem(compiler_stack_allocation,
+                DEMO_COMPILER_STACK_TOTAL_BYTES);
+        compiler_stack_allocation = NULL;
+    }
 }
 
 static int write_bytes(BPTR output, const char *bytes, size_t size)
@@ -110,8 +223,13 @@ static int write_hex32(BPTR output, uint32_t value)
 
 static int write_running_report(const char *path)
 {
-    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    BPTR output;
     int success;
+
+    if (path == NULL) {
+        return 1;
+    }
+    output = Open((STRPTR)path, MODE_NEWFILE);
 
     if (output == (BPTR)0) {
         return 0;
@@ -125,8 +243,13 @@ static int write_running_report(const char *path)
 
 static int write_failure_report(const char *path, const char *stage)
 {
-    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    BPTR output;
     int success;
+
+    if (path == NULL) {
+        return 1;
+    }
+    output = Open((STRPTR)path, MODE_NEWFILE);
 
     if (output == (BPTR)0) {
         return 0;
@@ -143,8 +266,13 @@ static int write_failure_report(const char *path, const char *stage)
 static int write_success_report(
     const char *path, const struct Miga80SourceViewMetrics *metrics)
 {
-    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    BPTR output;
     int success;
+
+    if (path == NULL) {
+        return 1;
+    }
+    output = Open((STRPTR)path, MODE_NEWFILE);
 
     if (output == (BPTR)0) {
         return 0;
@@ -179,11 +307,17 @@ static int write_success_report(
 static int write_run_report(
     const char *path, const struct Miga80SourceViewMetrics *metrics,
     const struct miga80_ast_function *ast,
-    const struct miga80_ir_function *ir, const uint8_t *code,
+    const struct miga80_ir_function *ir,
+    const struct miga80_value_function *value_ir, const uint8_t *code,
     size_t code_size, uint32_t framebuffer_checksum)
 {
-    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    BPTR output;
     int success;
+
+    if (path == NULL) {
+        return 1;
+    }
+    output = Open((STRPTR)path, MODE_NEWFILE);
 
     if (output == (BPTR)0) {
         return 0;
@@ -209,6 +343,8 @@ static int write_run_report(
         write_decimal(output, ir->instruction_count) &&
         write_text(output, "\nir_blocks=") &&
         write_decimal(output, ir->block_count) &&
+        write_text(output, "\nvalue_instructions=") &&
+        write_decimal(output, value_ir->value_count) &&
         write_text(output, "\nencoded_bytes=") &&
         write_decimal(output, code_size) &&
         write_text(output, "\nencoded_checksum=") &&
@@ -217,11 +353,35 @@ static int write_run_report(
         write_text(output, "\nframebuffer_checksum=") &&
         write_hex32(output, framebuffer_checksum) &&
         write_text(output,
-                   "\ncompiler=typed-ir-direct-o0\n"
+                   "\ncompiler=typed-value-ir-direct-o1-guarded\n"
                    "palette=workbench-sunset\n"
                    "source_playfield=pf1\n"
                    "native_execution=pass\n"
-                   "result=pass\n");
+                   "runtime_stack_guards=pass\n"
+                   "runtime_fault=0\n") &&
+        write_text(output, "execution_budget_remaining=") &&
+        write_decimal(output, last_runtime.budget) &&
+        write_text(output, "\n");
+    if (!Close(output)) {
+        success = 0;
+    }
+    return success;
+}
+
+static int append_stack_restore_report(const char *path)
+{
+    BPTR output = Open((STRPTR)path, MODE_READWRITE);
+    int success;
+
+    if (output == (BPTR)0 || Seek(output, 0L, OFFSET_END) < 0L) {
+        if (output != (BPTR)0) {
+            (void)Close(output);
+        }
+        return 0;
+    }
+    success = write_text(output,
+                         "compiler_stack_restore=pass\n"
+                         "result=pass\n");
     if (!Close(output)) {
         success = 0;
     }
@@ -396,21 +556,30 @@ static void format_compile_error(char *status, size_t capacity,
                    diagnostic->message);
 }
 
-static int compile_and_run(struct Screen *screen, uint8_t *chunky,
-                           const struct Miga80SourceViewMetrics *metrics,
-                           const char *report_path, char *error_status,
-                           size_t error_capacity)
+static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
 {
+    struct Screen *screen = compiler_request.screen;
+    uint8_t *chunky = compiler_request.chunky;
+    const struct Miga80SourceViewMetrics *metrics = compiler_request.metrics;
+    const char *report_path = compiler_request.report_path;
+    char *error_status = compiler_request.error_status;
+    const size_t error_capacity = compiler_request.error_capacity;
     struct miga80_ast_function *ast = NULL;
     struct miga80_ir_function *ir = NULL;
+    struct miga80_value_function *value_ir = NULL;
     struct miga80_diagnostic diagnostic;
     uint8_t *code = NULL;
-    APTR runtime_context[3];
+    UBYTE *runtime_stack = NULL;
     size_t code_size = 0U;
+    size_t required_stack_bytes = 0U;
     uint32_t framebuffer_checksum;
     const char *failure = "compiler_memory";
     int success = 0;
 
+    last_failure = NULL;
+    last_framebuffer_checksum = 0U;
+    (void)memset(&last_runtime, 0, sizeof(last_runtime));
+    error_status[0] = '\0';
     if (!show_source_status(screen, chunky, "COMPILING - PARSE")) {
         failure = "display_compile_parse";
         goto cleanup;
@@ -419,15 +588,23 @@ static int compile_and_run(struct Screen *screen, uint8_t *chunky,
         (ULONG)sizeof(*ast), MEMF_PUBLIC | MEMF_CLEAR);
     ir = (struct miga80_ir_function *)AllocMem(
         (ULONG)sizeof(*ir), MEMF_PUBLIC | MEMF_CLEAR);
+    value_ir = (struct miga80_value_function *)AllocMem(
+        (ULONG)sizeof(*value_ir), MEMF_PUBLIC | MEMF_CLEAR);
     code = (uint8_t *)AllocMem(DEMO_CODE_CAPACITY,
                               MEMF_PUBLIC | MEMF_CLEAR);
-    if (ast == NULL || ir == NULL || code == NULL) {
+    if (ast == NULL || ir == NULL || value_ir == NULL || code == NULL) {
         goto cleanup;
     }
     if (!miga80_parse_function(source_buffer, metrics->source_bytes, ast,
                                &diagnostic)) {
         failure = "compiler_parse";
         format_compile_error(error_status, error_capacity, &diagnostic);
+        goto cleanup;
+    }
+    if (ast->parameter_count != 0U || ast->result_type != MIGA80_TYPE_VOID) {
+        failure = "entry_signature";
+        (void)snprintf(error_status, error_capacity,
+                       "ERROR - ENTRY MUST HAVE NO ARGS AND RETURN VOID");
         goto cleanup;
     }
     if (!show_source_status(screen, chunky, "COMPILING - LOWER TYPED IR")) {
@@ -439,25 +616,77 @@ static int compile_and_run(struct Screen *screen, uint8_t *chunky,
         format_compile_error(error_status, error_capacity, &diagnostic);
         goto cleanup;
     }
-    if (!show_source_status(screen, chunky, "COMPILING - ENCODE 68020")) {
+    if (!show_source_status(screen, chunky, "COMPILING - OPTIMIZE O1")) {
+        failure = "display_compile_optimize";
+        goto cleanup;
+    }
+    if (!miga80_build_value_ir(ir, value_ir, &diagnostic)) {
+        failure = "compiler_optimize";
+        format_compile_error(error_status, error_capacity, &diagnostic);
+        goto cleanup;
+    }
+    if (!show_source_status(screen, chunky, "COMPILING - ENCODE O1 68020")) {
         failure = "display_compile_encode";
         goto cleanup;
     }
-    if (!miga80_encode_m68k_o0(code, DEMO_CODE_CAPACITY, ir, &code_size,
-                               &diagnostic)) {
+    if (!miga80_encode_m68k_o1_guarded(
+            code, DEMO_CODE_CAPACITY, value_ir, &code_size,
+            &required_stack_bytes, &diagnostic)) {
         failure = "compiler_encode";
         format_compile_error(error_status, error_capacity, &diagnostic);
         goto cleanup;
     }
+    if (required_stack_bytes > DEMO_RUNTIME_STACK_BYTES) {
+        failure = "runtime_stack_budget";
+        goto cleanup;
+    }
+    runtime_stack = (UBYTE *)AllocMem(DEMO_RUNTIME_STACK_TOTAL_BYTES,
+                                      MEMF_PUBLIC);
+    if (runtime_stack == NULL) {
+        failure = "runtime_stack_memory";
+        goto cleanup;
+    }
+    (void)memset(runtime_stack, DEMO_STACK_LOWER_GUARD,
+                 DEMO_STACK_GUARD_BYTES);
+    (void)memset(runtime_stack + DEMO_STACK_GUARD_BYTES, 0xcd,
+                 DEMO_RUNTIME_STACK_BYTES);
+    (void)memset(runtime_stack + DEMO_STACK_GUARD_BYTES +
+                     DEMO_RUNTIME_STACK_BYTES,
+                 DEMO_STACK_UPPER_GUARD, DEMO_STACK_GUARD_BYTES);
 
     CacheClearE((APTR)code, (ULONG)code_size, CACRF_ClearI);
     (void)memset(chunky, 0, DEMO_CHUNKY_BYTES);
-    runtime_context[0] = NULL;
-    runtime_context[1] = (APTR)miga80_runtime_pset;
-    runtime_context[2] = (APTR)chunky;
-    miga80_execute_generated((APTR)code, (APTR)runtime_context);
+    last_runtime.fault_handler = (uint32_t)(uintptr_t)miga80_runtime_fault;
+    last_runtime.pset_handler = (uint32_t)(uintptr_t)(force_runtime_fault
+                                    ? miga80_runtime_test_fault
+                                    : miga80_runtime_pset);
+    last_runtime.pixel_buffer = (uint32_t)(uintptr_t)chunky;
+    last_runtime.budget = execution_budget;
+    last_runtime.stack_top = (uint32_t)(uintptr_t)(
+        runtime_stack + DEMO_STACK_GUARD_BYTES + DEMO_RUNTIME_STACK_BYTES);
+    (void)miga80_execute_generated((APTR)code, (APTR)&last_runtime);
+    if (!region_has_value(runtime_stack, DEMO_STACK_GUARD_BYTES,
+                           DEMO_STACK_LOWER_GUARD) ||
+        !region_has_value(runtime_stack + DEMO_STACK_GUARD_BYTES +
+                              DEMO_RUNTIME_STACK_BYTES,
+                           DEMO_STACK_GUARD_BYTES, DEMO_STACK_UPPER_GUARD)) {
+        failure = "runtime_stack_guard";
+        goto cleanup;
+    }
+    if (last_runtime.fault_code != 0U) {
+        failure = "runtime_fault";
+        (void)snprintf(error_status, error_capacity, "ERROR L%lu:C%lu %s",
+                       (unsigned long)last_runtime.fault_line,
+                       (unsigned long)last_runtime.fault_column,
+                       last_runtime.fault_code ==
+                               MIGA80_ABI_FAULT_EXECUTION_BUDGET
+                           ? "EXECUTION BUDGET EXHAUSTED"
+                           : "CONTROLLED RUNTIME FAULT");
+        goto cleanup;
+    }
     framebuffer_checksum = miga80_source_view_checksum(
         chunky, DEMO_CHUNKY_BYTES);
+    last_framebuffer_checksum = framebuffer_checksum;
     if (miga80_source_view_draw_status(
             chunky, DEMO_SCREEN_WIDTH,
             "RUN COMPLETE - ESC SOURCE") != MIGA80_SOURCE_VIEW_OK ||
@@ -465,20 +694,27 @@ static int compile_and_run(struct Screen *screen, uint8_t *chunky,
         failure = "display_run_result";
         goto cleanup;
     }
-    if (!write_run_report(report_path, metrics, ast, ir, code, code_size,
-                          framebuffer_checksum)) {
+    if (report_path != NULL &&
+        !write_run_report(report_path, metrics, ast, ir, value_ir, code,
+                           code_size, framebuffer_checksum)) {
         failure = "write_run_report";
         goto cleanup;
     }
     success = 1;
 
 cleanup:
+    last_failure = success ? NULL : failure;
     if (!success) {
         if (error_status[0] == '\0') {
             (void)snprintf(error_status, error_capacity, "ERROR - %.48s",
                            failure);
         }
-        (void)write_failure_report(report_path, failure);
+        if (report_path != NULL) {
+            (void)write_failure_report(report_path, failure);
+        }
+    }
+    if (runtime_stack != NULL) {
+        FreeMem(runtime_stack, DEMO_RUNTIME_STACK_TOTAL_BYTES);
     }
     if (code != NULL) {
         FreeMem(code, DEMO_CODE_CAPACITY);
@@ -486,22 +722,128 @@ cleanup:
     if (ir != NULL) {
         FreeMem(ir, (ULONG)sizeof(*ir));
     }
+    if (value_ir != NULL) {
+        FreeMem(value_ir, (ULONG)sizeof(*value_ir));
+    }
     if (ast != NULL) {
         FreeMem(ast, (ULONG)sizeof(*ast));
     }
     return success;
 }
 
-static void run_event_loop(struct Window *window, struct Screen *screen,
+static void __attribute__((noinline)) run_compiler_on_dedicated_stack(void)
+{
+    StackSwap(&compiler_stack_swap);
+    /*
+     * Keep this worker call argument-free.  GCC may defer popping stacked
+     * arguments until the function epilogue; doing that after the second
+     * StackSwap would pop them from the restored system stack instead of the
+     * dedicated compiler stack and corrupt the caller's return address.
+     */
+    compiler_run_result = compile_and_run_on_current_stack();
+    StackSwap(&compiler_stack_swap);
+}
+
+static int compile_and_run(struct Screen *screen, uint8_t *chunky,
+                           const struct Miga80SourceViewMetrics *metrics,
+                           const char *report_path, char *error_status,
+                           size_t error_capacity)
+{
+    int guards_intact;
+
+    last_failure = NULL;
+    (void)memset(&last_runtime, 0, sizeof(last_runtime));
+    if ((SysBase->AttnFlags & AFF_68020) == 0U) {
+        (void)snprintf(error_status, error_capacity,
+                       "ERROR - 68020 CPU REQUIRED");
+        last_failure = "compiler_requires_68020";
+        (void)write_failure_report(report_path,
+                                   "compiler_requires_68020");
+        return 0;
+    }
+    if (!prepare_compiler_stack()) {
+        (void)snprintf(error_status, error_capacity,
+                       "ERROR - COMPILER STACK MEMORY");
+        last_failure = "compiler_stack_memory";
+        (void)write_failure_report(report_path,
+                                   "compiler_stack_memory");
+        return 0;
+    }
+
+    compiler_request.screen = screen;
+    compiler_request.chunky = chunky;
+    compiler_request.metrics = metrics;
+    compiler_request.report_path = report_path;
+    compiler_request.error_status = error_status;
+    compiler_request.error_capacity = error_capacity;
+    compiler_run_result = 0;
+    run_compiler_on_dedicated_stack();
+
+    guards_intact = compiler_stack_guards_intact();
+    release_compiler_stack();
+    if (!guards_intact) {
+        (void)snprintf(error_status, error_capacity,
+                       "ERROR - COMPILER STACK GUARD");
+        last_failure = "compiler_stack_guard";
+        (void)write_failure_report(report_path,
+                                   "compiler_stack_guard");
+        return 0;
+    }
+    if (compiler_run_result && report_path != NULL &&
+        !append_stack_restore_report(report_path)) {
+        (void)snprintf(error_status, error_capacity,
+                       "ERROR - STACK RESTORE REPORT");
+        last_failure = "write_stack_restore_report";
+        (void)write_failure_report(report_path,
+                                   "write_stack_restore_report");
+        return 0;
+    }
+    return compiler_run_result;
+}
+
+enum demo_state { DEMO_STATE_SOURCE, DEMO_STATE_RESULT, DEMO_STATE_ERROR };
+
+/* Shared by real raw-key input and the on-target workflow regression. */
+static int workflow_key(struct Screen *screen, uint8_t *chunky,
+                         const struct Miga80SourceViewMetrics *metrics,
+                         const char *report_path, enum demo_state *state,
+                         UWORD code)
+{
+    if ((code & 0x80U) != 0U) {
+        return 0;
+    }
+    if (code == DEMO_RAWKEY_F5 && *state == DEMO_STATE_SOURCE) {
+        char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+
+        error_status[0] = '\0';
+        *state = compile_and_run(screen, chunky, metrics, report_path,
+                                  error_status, sizeof(error_status))
+                     ? DEMO_STATE_RESULT : DEMO_STATE_ERROR;
+        if (*state == DEMO_STATE_ERROR &&
+            !show_source_status(screen, chunky, error_status)) {
+            return -1;
+        }
+    } else if (code == DEMO_RAWKEY_ESCAPE) {
+        if (*state == DEMO_STATE_SOURCE) {
+            return 1;
+        }
+        if (!show_source_status(screen, chunky,
+                                 "SOURCE READY - F5 RUN - ESC EXIT")) {
+            return -1;
+        }
+        *state = DEMO_STATE_SOURCE;
+    }
+    return 0;
+}
+
+static int run_event_loop(struct Window *window, struct Screen *screen,
                            uint8_t *chunky,
                            const struct Miga80SourceViewMetrics *metrics,
                            const char *report_path)
 {
-    enum demo_state { DEMO_STATE_SOURCE, DEMO_STATE_RESULT,
-                      DEMO_STATE_ERROR } state = DEMO_STATE_SOURCE;
-    int finished = 0;
+    enum demo_state state = DEMO_STATE_SOURCE;
 
-    while (!finished) {
+    for (;;) {
         struct IntuiMessage *message;
 
         WaitPort(window->UserPort);
@@ -509,35 +851,159 @@ static void run_event_loop(struct Window *window, struct Screen *screen,
                     (struct IntuiMessage *)GetMsg(window->UserPort)) != NULL) {
             const ULONG message_class = message->Class;
             const UWORD code = message->Code;
+            int result;
 
             ReplyMsg((struct Message *)message);
-            if (message_class != IDCMP_RAWKEY || (code & 0x80U) != 0U) {
+            if (message_class != IDCMP_RAWKEY) {
                 continue;
             }
-            if ((code & 0x7fU) == DEMO_RAWKEY_F5 &&
-                state == DEMO_STATE_SOURCE) {
-                char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
-
-                error_status[0] = '\0';
-                state = compile_and_run(screen, chunky, metrics,
-                                        report_path, error_status,
-                                        sizeof(error_status))
-                            ? DEMO_STATE_RESULT
-                            : DEMO_STATE_ERROR;
-                if (state == DEMO_STATE_ERROR) {
-                    (void)show_source_status(screen, chunky, error_status);
-                }
-            } else if ((code & 0x7fU) == DEMO_RAWKEY_ESCAPE) {
-                if (state == DEMO_STATE_SOURCE) {
-                    finished = 1;
-                } else {
-                    (void)show_source_status(
-                        screen, chunky, "SOURCE READY - F5 RUN - ESC EXIT");
-                    state = DEMO_STATE_SOURCE;
-                }
+            result = workflow_key(screen, chunky, metrics, report_path,
+                                    &state, code);
+            if (result != 0) {
+                return result > 0;
             }
         }
     }
+}
+
+static int workflow_case(struct Screen *screen, uint8_t *chunky,
+                          const char *source, const char *expected_failure,
+                          uint32_t expected_fault)
+{
+    struct Miga80SourceViewMetrics metrics;
+    enum demo_state state = DEMO_STATE_SOURCE;
+    uint32_t source_checksum;
+
+    (void)strcpy(source_buffer, source);
+    if (miga80_source_view_render(chunky, DEMO_SCREEN_WIDTH, source_buffer,
+                                   text_length(source_buffer), &metrics) !=
+            MIGA80_SOURCE_VIEW_OK || !publish_canonical(screen, chunky)) {
+        return 0;
+    }
+    source_checksum = miga80_source_view_checksum(chunky, DEMO_CHUNKY_BYTES);
+    if (workflow_key(screen, chunky, &metrics, NULL, &state,
+                       DEMO_RAWKEY_F5) != 0 ||
+        state != (expected_failure == NULL ? DEMO_STATE_RESULT
+                                          : DEMO_STATE_ERROR) ||
+        (expected_failure != NULL &&
+         (last_failure == NULL ||
+          strcmp(last_failure, expected_failure) != 0)) ||
+        last_runtime.fault_code != expected_fault ||
+        (expected_failure == NULL &&
+         last_framebuffer_checksum != UINT32_C(0xc4604fc7)) ||
+        (expected_fault != 0U &&
+         (last_runtime.fault_line == 0U || last_runtime.fault_column == 0U))) {
+        return 0;
+    }
+    /* F5 in result/error is ignored; key release is ignored as well. */
+    if (workflow_key(screen, chunky, &metrics, NULL, &state,
+                       DEMO_RAWKEY_F5) != 0 ||
+        workflow_key(screen, chunky, &metrics, NULL, &state,
+                       DEMO_RAWKEY_ESCAPE | 0x80U) != 0 ||
+        workflow_key(screen, chunky, &metrics, NULL, &state,
+                       DEMO_RAWKEY_ESCAPE) != 0 ||
+        state != DEMO_STATE_SOURCE ||
+        miga80_source_view_checksum(chunky, DEMO_CHUNKY_BYTES) !=
+            source_checksum || !verify_source_view(screen, chunky)) {
+        return 0;
+    }
+    return workflow_key(screen, chunky, &metrics, NULL, &state,
+                          DEMO_RAWKEY_ESCAPE) == 1;
+}
+
+#define DEMO_WORKFLOW_ROUNDS 3U
+static const char *workflow_failure;
+
+static int run_workflow_regression(struct Screen *screen, uint8_t *chunky)
+{
+    static const char invalid_source[] =
+        "function main(): void\n  local x: i32 =\nend\n";
+    static const char infinite_source[] =
+        "function main(): void\n  while true do\n    continue\n  end\nend\n";
+    static const char fault_source[] =
+        "function main(): void\n  pset(0, 0, 1)\nend\n";
+    char *default_source;
+    ULONG baseline;
+    unsigned int round;
+    int success = 0;
+
+    workflow_failure = "selftest_memory";
+    default_source = (char *)AllocMem(DEMO_SOURCE_CAPACITY + 1U, MEMF_PUBLIC);
+    if (default_source == NULL) {
+        return 0;
+    }
+    (void)strcpy(default_source, source_buffer);
+    /* One warmup includes first-use library/compiler allocations. */
+    workflow_failure = "selftest_warmup";
+    if (!workflow_case(screen, chunky, default_source, NULL, 0U)) {
+        goto done;
+    }
+    baseline = AvailMem(MEMF_PUBLIC);
+    for (round = 0U; round < DEMO_WORKFLOW_ROUNDS; ++round) {
+        workflow_failure = "selftest_compile_error";
+        if (!workflow_case(screen, chunky, invalid_source, "compiler_parse",
+                            0U)) {
+            goto done;
+        }
+        execution_budget = 8U;
+        workflow_failure = "selftest_budget";
+        if (!workflow_case(screen, chunky, infinite_source, "runtime_fault",
+                            MIGA80_ABI_FAULT_EXECUTION_BUDGET) ||
+            last_runtime.budget != 0U) {
+            goto done;
+        }
+        execution_budget = DEMO_EXECUTION_BUDGET;
+        force_runtime_fault = 1;
+        workflow_failure = "selftest_forced_fault";
+        if (!workflow_case(screen, chunky, fault_source, "runtime_fault",
+                            MIGA80_ABI_FAULT_DIVISION_BY_ZERO)) {
+            goto done;
+        }
+        force_runtime_fault = 0;
+        workflow_failure = "selftest_recovery";
+        if (!workflow_case(screen, chunky, default_source, NULL, 0U)) {
+            goto done;
+        }
+        workflow_failure = "selftest_memory_growth";
+        if (AvailMem(MEMF_PUBLIC) < baseline) {
+            goto done;
+        }
+    }
+    success = 1;
+    workflow_failure = NULL;
+
+done:
+    execution_budget = DEMO_EXECUTION_BUDGET;
+    force_runtime_fault = 0;
+    (void)strcpy(source_buffer, default_source);
+    FreeMem(default_source, DEMO_SOURCE_CAPACITY + 1U);
+    return success;
+}
+
+static int write_workflow_report(const char *path, int passed)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int success;
+
+    if (output == (BPTR)0) {
+        return 0;
+    }
+    success = write_text(output, "miga80_workflow_report=1\n") &&
+        (passed
+            ? write_text(output,
+                "rounds=3\ncompile_run_cycles=13\n"
+                "compile_error_recovery=pass\nbudget_recovery=pass\n"
+                "forced_fault_recovery=pass\nsource_return=pass\n"
+                "repeated_mandelbrot=pass\nmemory_no_growth=pass\n"
+                "hosted_cleanup=pass\nresult=pass\n")
+            : (write_text(output, "failure=") &&
+               write_text(output, workflow_failure != NULL
+                                      ? workflow_failure : "selftest_setup") &&
+               write_text(output, "\nresult=fail\n")));
+    if (!Close(output)) {
+        success = 0;
+    }
+    return success;
 }
 
 int main(int argc, char **argv)
@@ -583,6 +1049,7 @@ int main(int argc, char **argv)
         argc > 1 && argv[1][0] != '\0' ? argv[1] : DEMO_DEFAULT_SOURCE;
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
+    const int selftest = argc > 3 && strcmp(argv[3], "SELFTEST") == 0;
     struct DisplayInfo display_info = {0};
     DisplayInfoHandle display_handle;
     struct Miga80SourceViewMetrics metrics;
@@ -697,7 +1164,9 @@ int main(int argc, char **argv)
     }
 
     success = 1;
-    if (argc > 3 && strcmp(argv[3], "AUTORUN") == 0) {
+    if (selftest) {
+        success = run_workflow_regression(screen, chunky);
+    } else if (argc > 3 && strcmp(argv[3], "AUTORUN") == 0) {
         char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
 
         error_status[0] = '\0';
@@ -706,13 +1175,10 @@ int main(int argc, char **argv)
             success = 0;
         }
     } else {
-        run_event_loop(window, screen, chunky, &metrics, report_path);
+        success = run_event_loop(window, screen, chunky, &metrics, report_path);
     }
 
 cleanup:
-    if (!success && failure != NULL) {
-        (void)write_failure_report(report_path, failure);
-    }
     if (chunky != NULL) {
         FreeMem(chunky, (ULONG)DEMO_CHUNKY_BYTES);
     }
@@ -720,7 +1186,11 @@ cleanup:
         CloseWindow(window);
     }
     if (screen != NULL) {
-        (void)CloseScreen(screen);
+        if (!CloseScreen(screen)) {
+            failure = "close_source_screen";
+            workflow_failure = failure;
+            success = 0;
+        }
     }
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);
@@ -729,6 +1199,12 @@ cleanup:
     if (GfxBase != NULL) {
         CloseLibrary((struct Library *)GfxBase);
         GfxBase = NULL;
+    }
+    if (!success && failure != NULL) {
+        (void)write_failure_report(report_path, failure);
+    }
+    if (selftest && !write_workflow_report(report_path, success)) {
+        success = 0;
     }
     return success ? RETURN_OK : RETURN_FAIL;
 }

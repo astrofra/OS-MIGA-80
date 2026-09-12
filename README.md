@@ -43,7 +43,8 @@ gmake compiler-abi-test compiler-test compiler-execute-test compiler-spill-test
 ```
 
 Cross-build the same portable C99 compiler bootstrap for 68020/libnix and run
-its typed-IR evaluator plus `-O1` renderer under `vamos` with:
+its typed-IR evaluator, `-O1` renderer, and direct O1 encoder under `vamos`
+with:
 
 ```sh
 gmake compiler-amiga-test
@@ -55,6 +56,8 @@ to three scalar `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`symbol` parameters, tw
 initialized declarations, reassignment, one final return, arithmetic, all six
 comparisons (`!=` aliases `~=`), nested `if`/`then`/`else`/`end`, and nested
 `while`/`do`/`end` loops with loop-carried values, `break`, and `continue`.
+It also accepts an explicit `void` result and the statement-only
+`pset(i32, i32, u8)` runtime intrinsic used by the vertical slice.
 Signed integer `/` truncates toward zero, unsigned integer `/` uses `DIVU.L`, and
 statement-only `/=` follows the target numeric type; all use controlled
 division-by-zero faults. Narrow arithmetic wraps at its declared width and is
@@ -142,22 +145,39 @@ Build and boot-test the first complete MIGA-80 vertical slice with:
 gmake source-view-test miga80-demo-adf-inspect
 gmake miga80-demo-adf-fs-uae
 gmake compiler-encoder-musashi-test
+gmake compiler-call-test runtime-guards-test
 gmake miga80-demo-adf-fs-uae-autorun
+gmake miga80-demo-adf-fs-uae-workflow
 ```
 
 This produces `build/distribution/miga80-source-view.adf`. The standalone OFS
 disk launches MIGA-80, loads `DATA/DEFAULT.LUA`, and displays its complete
 30-line Mandelbrot source with the project 4×8 bitmap font. `F5` parses and
-lowers that source on the Amiga, directly emits a 744-byte 68020 function in
+lowers that source on the Amiga, builds the value IR, applies the bounded O1
+register plan, and directly emits a guarded 464-byte 68020 function in
 RAM, synchronizes the instruction cache, and executes it through the private
 runtime ABI. The generated function performs 20,480 `pset` calls and publishes
 the resulting 160×128 Mandelbrot viewport. The exact ADF boot and an automated
 on-target `AUTORUN` variant are checked under FS-UAE; the latter must match the
 typed-IR and Musashi framebuffer checksum `c4604fc7`.
 
-This first executable proof deliberately uses the stack-oriented O0 direct
-encoder. Extending direct emission to the call-aware O1 register plan is the
-next performance tranche; see the
+The F5 path checks the 68020 requirement, allocates a guarded private 32 KiB
+compiler stack, and enters it with Exec `StackSwap`. This is independent of
+the boot Shell and of the stack assigned to a manual CLI launch. Generated
+code uses a separate guarded 4 KiB stack and a budget of 1,000,000 backward
+transfers. Budget exhaustion and controlled faults restore the host stack and
+return to the error/source workflow. The SELFTEST regression exercises repeated
+success, syntax-error, budget-fault, and forced-fault cycles; see
+[workflow robustness](documentation/MIGA-80-workflow-robustness.md).
+Interactive diagnostics are written to `RAM:MIGA80-BOOTED.TXT`, keeping the
+distribution ADF unchanged and preventing emulator save-disk overlays from
+outliving the disk layout they were created for.
+
+The unguarded 404-byte O1 baseline is byte-identical to its GNU-assembly
+oracle. Under Musashi it executes 7,466,958 instructions, versus 17,314,258 for the original
+744-byte O0 direct image; these are deterministic regression counts, not
+cycle-accurate A1200 timings. A focused `pset` test also proves that values live
+across a call are moved out of caller-saved `D0-D2`. See the
 [Mandelbrot vertical-slice plan](documentation/MIGA-80-mandelbrot-vertical-slice.md).
 
 The target is currently locked to the `libnix` Kickstart 2+ startup/runtime with

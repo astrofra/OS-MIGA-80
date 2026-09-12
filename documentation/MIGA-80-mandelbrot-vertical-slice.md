@@ -1,7 +1,8 @@
 # MIGA-80 Mandelbrot Vertical Slice
 
-**Status:** First complete F5 path implemented and passing under Musashi and
-FS-UAE; O1 direct emission and full runtime guards remain in progress
+**Status:** Call-aware O1 F5 path and hosted workflow protections implemented;
+physical A1200 feedback and responsive execution interruption remain pending.
+See the [2026-09-12 robustness checkpoint](MIGA-80-workflow-robustness.md).
 
 **Date:** 2026-09-05
 
@@ -107,11 +108,10 @@ oracle. It may never be used as the displayed runtime result.
 - a claim about stock-A1200 frame rate derived from Musashi or FS-UAE timing;
 - freezing the complete MIGA-80 version 1 default palette or font repertoire.
 
-The first executable checkpoint uses the bounded stack-oriented `-O0` IR as
-its direct-encoder source. This keeps the first native proof small and makes it
-directly comparable with the existing assembly oracle. It is not the final
-performance configuration: moving direct emission to the call-aware `-O1`
-value-IR register plan is the next compiler tranche.
+The first executable checkpoint used the bounded stack-oriented `-O0` IR as
+its direct-encoder source. The current checkpoint instead builds value IR and
+uses the call-aware `-O1` register plan. O0 remains the deliberately explicit
+semantic and performance baseline.
 
 ## 5. Existing Foundations and Missing Links
 
@@ -120,10 +120,10 @@ value-IR register plan is the next compiler tranche.
 | ADF | A reproducible OFS image builder and FS-UAE boot test exist for the physical graphics benchmark. | Generalize the packaging inputs and create a MIGA-80 startup image. |
 | Display | A hosted 256 x 256 x 8 AGA dual-playfield screen passes under FS-UAE. | Turn the smoke-test path into reusable shell/display code with event handling. |
 | Pixel conversion | Correct C and 68020 C2P4 paths exist for 160 x 128, 192 x 160, and 256 x 256. | Select the 160 x 128 byte-per-pixel path and publish the generated viewport safely in hosted mode. |
-| Compiler | The portable compiler implements typed locals, CFG, `if`, normalized `while`, `break`, fixed Q16.16 arithmetic, `-O1`, and spills. | Add `void`, intrinsic calls, call-aware liveness, and the syntax needed by the default source. |
-| Assembly backend | GNU m68k assembly rendering is validated by the typed-IR oracle and Musashi. | Introduce a shared low-level instruction form and direct binary encoding. |
-| Native execution | Musashi checks generated functions, ABI preservation, stack bounds, and controlled numeric faults. | Add runtime-service mocks, executable target allocation, cache synchronization, and the host/target trampoline. |
-| UI | The specification defines a hosted editor shell. | Add the first screen states, 4 x 8 text rasterizer, status row, and `F5`/`Esc` routing. |
+| Compiler | The portable compiler implements typed locals, cyclic CFG, `void`, fixed arithmetic, observable `pset`, and call-aware `-O1`. | Extend direct O1 to division, conversions, immutable values, and future user calls. |
+| Assembly backend | GNU rendering and direct O0/O1 emission are validated by typed-IR and Musashi oracles. | Converge the remaining instruction families on a fully shared low-level model. |
+| Native execution | Musashi and FS-UAE check runtime calls, ABI preservation, direct execution, cache synchronization, budgets, forced faults, and repeated workflow recovery. | Add responsive stop polling and physical/long-duration validation. |
+| UI | The source, compile, run, result, and error states use the project 4 x 8 font. | Add actual editing and scrolling in a later slice. |
 
 ## 6. Read-Only Source View
 
@@ -332,7 +332,7 @@ scope.
 
 ### 11.2 Call-aware optimization
 
-Value liveness must model the intrinsic's caller-saved clobbers. Values live
+Value liveness models the intrinsic's caller-saved clobbers. Values live
 across `pset` must reside in callee-saved registers or spill slots, or be moved
 there before the call. `phi` coalescing and dead-value removal may not erase,
 duplicate, merge, or reorder calls.
@@ -341,33 +341,40 @@ The default program is a useful pressure case because loop coordinates and
 fixed-point state cross nested control-flow edges, while only the values needed
 by the following pixel remain live across `pset`.
 
+The allocator runs a bounded backward pass within the CFG to identify values
+crossing a call. Such values cannot remain assigned to `D0-D2`; incoming
+parameters are copied to `D3-D7` when required. Call arguments are staged on
+the aligned stack before loading `D0-D2`. The focused call-survival test makes
+the Musashi `pset` shim overwrite `D0-D2/A0-A1`, then successfully uses two
+preserved inputs after the call.
+
 ### 11.3 Runtime context extension
 
 ABI 0.6 reserves `A5` for an immutable runtime-context pointer and defines the
-non-returning fault-handler pointer at offset zero. Runtime services require a
-versioned ABI extension. The exact ABI revision is frozen in the ABI document
-before implementation, with at least:
+non-returning fault-handler pointer at offset zero. Its compatible graphics
+profile is now frozen with:
 
 - the existing fault handler at offset `0`;
 - one immutable `pset` service entry;
 - access to the active runtime graphics state without exposing it to source
   code;
 - documented service clobbers and stack alignment;
-- a context size/version validation rule.
+- a twelve-byte context requirement for functions using `pset`.
 
 The service entry is a private-ABI shim, not an Amiga C ABI call made directly
 by generated code.
 
-### 11.4 Shared low-level instruction form
+### 11.4 Shared allocation plan and encoder convergence
 
-The GNU assembly renderer and direct encoder must consume the same bounded
-low-level instruction sequence. The initial form needs only the instruction,
-addressing-mode, label, branch, literal-pool, prologue/epilogue, fixed-point,
-fault, and intrinsic-call variants reachable from the default source and its
-negative tests.
+The GNU assembly renderer and direct O1 encoder consume the exact same bounded
+allocation plan: register ownership, spills, saved registers, and `phi` edge
+locations are computed once. Both render from value IR without parsing
+assembly text. For the default Mandelbrot and focused call-survival fixture,
+their flat machine-code images are byte-identical.
 
-It must not encode by parsing the generated GNU assembly text. Assembly text
-is one renderer; machine code is another renderer from the shared form.
+A fully shared low-level instruction sequence remains desirable when direct O1
+coverage expands beyond the numeric/`pset` subset. Exact byte comparison keeps
+the two current renderers from silently drifting meanwhile.
 
 ### 11.5 Direct image
 
@@ -379,13 +386,17 @@ The direct encoder performs two bounded passes:
 
 Every write checks capacity. Unsupported instructions, invalid register
 classes, odd targets, overflowing displacements, unresolved labels, and image
-size overflow are compile errors. The produced image has an explicit entry
-offset, byte length, maximum stack requirement, runtime-ABI version, and source
-map/fault metadata.
+size overflow are compile errors. The current single-function API returns its
+checked byte length; an image header carrying entry offset, maximum stack,
+runtime-ABI version, and source-map/fault metadata remains later work.
 
 The target copies or emits the checked image into executable memory, performs
 the required Exec cache synchronization for the exact range, and enters it
-only through the runtime trampoline.
+only through the runtime trampoline. Before F5 enters the compiler, the
+application checks `AttnFlags` for a 68020-class CPU, allocates a guarded
+private 32 KiB compiler stack, and installs it with Exec `StackSwap`. It
+restores the caller's stack and validates both outer guards afterward. This is
+independent of the boot Shell and the default 4 KiB CLI stack.
 
 ## 12. Guarded Execution
 
@@ -400,10 +411,10 @@ The first target trampoline must:
 - validate stack guards after execution;
 - reject an image whose declared stack or ABI requirements do not fit.
 
-The shipped source is read-only and bounded, but generated loops must still
-have an execution budget. The first implementation may use a deterministic
-back-edge budget rather than final interactive stop polling. Budget exhaustion
-uses the same controlled restoration path as other runtime faults. Responsive
+The shipped source is read-only and bounded. Guarded O1 now enforces a
+deterministic budget of 1,000,000 backward transfers on the emitted control
+flow, with source-located fault 3 on exhaustion. The same trampoline restores
+the host state after either a controlled fault or normal return. Responsive
 `Esc` interruption during a running generated function belongs to the later
 hosted/exclusive input-safe-point work; `Esc` is required in the result and
 error states for this slice.
@@ -463,23 +474,31 @@ The raw DD ADF remains exactly 901,120 bytes regardless of used blocks. Its
 SHA-256 is recorded in the adjacent generated manifest and may change when
 timestamps or any packaged input change.
 
-### 13.2 Implemented native-execution checkpoint
+### 13.2 Implemented call-aware O1 native-execution checkpoint
 
 The 2026-09-05 automated A1200 FS-UAE run now also proves:
 
 - successful on-target parsing of 73 AST nodes and 28 statements;
 - lowering to 112 typed-IR instructions in 17 basic blocks;
-- direct emission of 744 bytes of position-independent 68020 code, checksum
-  `69f4c1eb`, without an assembler or linker on the ADF;
+- construction of 68 value-IR instructions, of which 44 remain live after O1;
+- direct emission of 404 bytes of position-independent 68020 code, checksum
+  `a80592ca`, without an assembler or linker on the ADF;
 - instruction-cache synchronization followed by execution through `A5` and
   the private `pset` service;
 - a canonical result checksum of `c4604fc7`, identical to the typed-IR
   evaluator, the direct image under Musashi, and the GNU-assembly oracle under
   Musashi;
 - 20,480 observable `pset` calls in both Musashi paths;
-- a 53,360-byte Hunk executable with 45,652 text bytes, 548 data bytes, and
-  5,000 BSS bytes;
-- 130 occupied OFS blocks, reported as 65 KiB including filesystem overhead.
+- byte-identical 404-byte direct and GNU O1 images;
+- 7,466,958 Musashi-counted O1 instructions, versus 17,314,258 for the
+  historical 744-byte direct O0 image;
+- a 78,184-byte Hunk executable with 68,612 text bytes, 548 data bytes, and
+  5,044 BSS bytes;
+- 182 occupied OFS blocks, reported as 91 KiB including filesystem overhead.
+
+The O1 image is 46% smaller and its Musashi instruction count is 57% lower
+than the O0 direct baseline. Those figures are optimizer regression signals,
+not timing or cycle claims for a physical A1200.
 
 The first integration run also exposed an ABI-bridge defect: generated code
 correctly treated `D2` as caller-saved under the MIGA-80 ABI, while the Amiga C
@@ -487,6 +506,23 @@ caller kept the framebuffer pointer in its callee-saved `D2`. The trampoline
 now preserves `D2` when crossing from the Amiga C ABI into generated code and
 restores it before returning to C. The target checksum regression covers this
 boundary.
+
+The first O1 ADF run exposed a separate compiler-stack defect: the direct
+encoder placed its multi-kilobyte branch/fixup workspace in an automatic C
+object. The hosted Amiga stack was too small, so execution stopped before the
+final report even though the emitted bytes passed on the host. Both direct
+encoders now allocate that bounded workspace explicitly and report allocation
+failure. The F5 path now installs its own guarded 32 KiB compiler stack through
+Exec `StackSwap`, without relying on a ROM Shell command. The corrected O1
+path completes under Kickstart 3.0 and 3.1 FS-UAE profiles, with zero or
+configured Fast RAM, and writes the full report above.
+
+The interactive Startup-Sequence sends its diagnostic report to
+`RAM:MIGA80-BOOTED.TXT`; it never modifies the distribution floppy. The
+automated FS-UAE harness replaces that Startup-Sequence only in its private
+ADF copy so it can extract `MIGA80:BOOTED.TXT`. This separation avoids stale
+FS-UAE Launcher `.sdf` save images overlaying filesystem sectors from an older
+build onto a newly generated ADF with the same filename.
 
 ## 14. Validation Matrix
 
@@ -561,16 +597,20 @@ physical-hardware release gates.
 1. **Completed 2026-09-05 -- visible shell:** reusable hosted screen, input
    state, checked font importer, source raster, palette, default source file,
    boot report, and bootable ADF.
-2. **Partly completed -- callable compiler:** `void`, semicolons, typed `pset`,
-   stack IR, runtime-context service, and Musashi mock are implemented;
-   call-aware value-IR liveness remains.
-3. **Partly completed -- direct code:** the checked O0 encoder, target
-   executable allocation, cache synchronization, and C/ABI trampoline are
-   implemented; the shared O1 instruction form and complete guards remain.
-4. **Partly completed -- integrated Mandelbrot:** byte-per-pixel rendering,
-   one-shot C2P/publication, checksums, and source/result states are
-   implemented; budgets, forced-fault coverage, and repeated-state automation
-   remain.
+2. **Completed for the vertical subset -- callable compiler:** `void`,
+   semicolons, typed `pset`, observable value IR, runtime-context service, and
+   call-aware liveness/allocation are implemented and checked with a
+   caller-saved-clobbering Musashi mock.
+3. **Completed for the vertical subset -- direct O1 code:** the checked O0 and
+   O1 encoders, shared allocation plan, target executable allocation, cache
+   synchronization, and C/ABI trampoline are implemented. Broader O1
+   instruction coverage remains. The guarded runtime now restores the host
+   state after budget and forced-service faults.
+4. **Implemented -- integrated Mandelbrot and hosted recovery:** byte-per-pixel
+   rendering, one-shot publication, checksums, source/result/error states,
+   backward-edge budgets, separate runtime stack, forced-fault recovery, and
+   repeated-state automation. The protected shipping image is 464 bytes; the
+   404-byte figures in the September 5 checkpoint are the unguarded baseline.
 5. **Release proof:** automated FS-UAE boot, reproducible ADF/manifest, then
    timing and visual review on a stock PAL A1200.
 

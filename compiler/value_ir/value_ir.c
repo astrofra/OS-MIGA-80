@@ -47,6 +47,7 @@ static unsigned int add_value(struct miga80_value_function *function,
     value->opcode = opcode;
     value->left = left;
     value->right = right;
+    value->third = MIGA80_INVALID_VALUE;
     value->immediate = immediate;
     value->parameter_index = parameter_index;
     value->left_block = MIGA80_INVALID_BLOCK;
@@ -371,7 +372,8 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
            opcode == MIGA80_VALUE_FIX_FROM_I32 ||
            opcode == MIGA80_VALUE_I32_FROM_FIX ||
            opcode == MIGA80_VALUE_NORMALIZE_INTEGER ||
-           comparison_opcode(opcode) || opcode == MIGA80_VALUE_PHI;
+           comparison_opcode(opcode) || opcode == MIGA80_VALUE_CALL_PSET ||
+           opcode == MIGA80_VALUE_PHI;
 }
 
 static int opcode_has_right(enum miga80_value_opcode opcode)
@@ -381,7 +383,13 @@ static int opcode_has_right(enum miga80_value_opcode opcode)
            opcode == MIGA80_VALUE_MUL_FIX || opcode == MIGA80_VALUE_DIV ||
            opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV_U ||
-           comparison_opcode(opcode) || opcode == MIGA80_VALUE_PHI;
+           comparison_opcode(opcode) || opcode == MIGA80_VALUE_CALL_PSET ||
+           opcode == MIGA80_VALUE_PHI;
+}
+
+static int opcode_has_third(enum miga80_value_opcode opcode)
+{
+    return opcode == MIGA80_VALUE_CALL_PSET;
 }
 
 static int mark_root(struct miga80_value_function *function,
@@ -408,9 +416,11 @@ static int mark_live_values(struct miga80_value_function *function,
     unsigned int block_index;
     unsigned int value_index;
 
-    if (!mark_root(function, function->result, worklist, &worklist_size,
-                   diagnostic)) {
-        return 0;
+    if (function->result_type != MIGA80_TYPE_VOID) {
+        if (!mark_root(function, function->result, worklist, &worklist_size,
+                       diagnostic)) {
+            return 0;
+        }
     }
     for (block_index = 0U; block_index < function->block_count;
          ++block_index) {
@@ -424,6 +434,12 @@ static int mark_live_values(struct miga80_value_function *function,
          ++value_index) {
         const struct miga80_value_instruction *value =
             &function->values[value_index];
+
+        if (value->opcode == MIGA80_VALUE_CALL_PSET &&
+            !mark_root(function, value_index, worklist, &worklist_size,
+                       diagnostic)) {
+            return 0;
+        }
 
         if ((value->opcode == MIGA80_VALUE_DIV_FIX ||
              value->opcode == MIGA80_VALUE_DIV ||
@@ -463,6 +479,15 @@ static int mark_live_values(struct miga80_value_function *function,
                            &worklist_size, diagnostic)) {
                 return fail(diagnostic, value->line, value->column,
                             "value IR right operand is invalid");
+            }
+        }
+        if (opcode_has_third(value->opcode)) {
+            if (value->third >= function->value_count ||
+                value->third == value_index ||
+                !mark_root(function, value->third, worklist,
+                           &worklist_size, diagnostic)) {
+                return fail(diagnostic, value->line, value->column,
+                            "value IR third operand is invalid");
             }
         }
     }
@@ -986,16 +1011,37 @@ static int lower_block_values(const struct miga80_ir_function *source,
                                 instruction->column, diagnostic);
             break;
         }
+        case MIGA80_IR_CALL_PSET: {
+            const unsigned int color = stack[--stack_size];
+            const unsigned int y = stack[--stack_size];
+            const unsigned int x = stack[--stack_size];
+
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_PSET, x, y, 0U, 0U,
+                              instruction->line, instruction->column,
+                              diagnostic);
+            if (value != MIGA80_INVALID_VALUE) {
+                result->values[value].third = color;
+                continue;
+            }
+            break;
+        }
         case MIGA80_IR_BRANCH_FALSE:
+            block->line = instruction->line;
+            block->column = instruction->column;
             block->terminator = MIGA80_VALUE_BRANCH;
             block->condition = stack[--stack_size];
             continue;
         case MIGA80_IR_JUMP:
+            block->line = instruction->line;
+            block->column = instruction->column;
             block->terminator = MIGA80_VALUE_JUMP;
             continue;
         case MIGA80_IR_RETURN:
             block->terminator = MIGA80_VALUE_RETURN;
-            result->result = stack[--stack_size];
+            if (result->result_type != MIGA80_TYPE_VOID) {
+                result->result = stack[--stack_size];
+            }
             continue;
         default:
             return fail(diagnostic, instruction->line, instruction->column,
@@ -1060,6 +1106,9 @@ static void replace_value(struct miga80_value_function *function,
         }
         if (opcode_has_right(value->opcode) && value->right == replaced) {
             value->right = replacement;
+        }
+        if (opcode_has_third(value->opcode) && value->third == replaced) {
+            value->third = replacement;
         }
     }
     for (index = 0U; index < function->block_count; ++index) {
@@ -1231,7 +1280,8 @@ int miga80_build_value_ir(const struct miga80_ir_function *source,
             goto done;
         }
     }
-    if (result->result == MIGA80_INVALID_VALUE) {
+    if (result->result_type != MIGA80_TYPE_VOID &&
+        result->result == MIGA80_INVALID_VALUE) {
         (void)fail(diagnostic, 0U, 0U, "typed IR has no value return");
         goto done;
     }

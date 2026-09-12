@@ -1,0 +1,7 @@
+source_bytes=98
+ir_instructions=8
+ir_blocks=1
+value_instructions=5
+value_live_instructions=5
+o1_encoded_bytes=36
+o1_encoded_checksum=46f49544

@@ -9,7 +9,7 @@
 #define MIGA80_MAX_CFG_JOINS ((MIGA80_MAX_BASIC_BLOCKS - 1U) / 3U)
 #define MIGA80_MAX_VALUE_INSTRUCTIONS \
     (MIGA80_MAX_PARAMETERS + MIGA80_MAX_AST_NODES + \
-     MIGA80_MAX_CFG_JOINS * MIGA80_MAX_LOCALS)
+     MIGA80_MAX_STATEMENTS + MIGA80_MAX_CFG_JOINS * MIGA80_MAX_LOCALS)
 #define MIGA80_INVALID_VALUE UINT_MAX
 
 enum miga80_value_opcode {
@@ -36,6 +36,7 @@ enum miga80_value_opcode {
     MIGA80_VALUE_GT_U32,
     MIGA80_VALUE_GE_U32,
     MIGA80_VALUE_NORMALIZE_INTEGER,
+    MIGA80_VALUE_CALL_PSET,
     MIGA80_VALUE_PHI
 };
 
@@ -44,6 +45,7 @@ struct miga80_value_instruction {
     enum miga80_value_opcode opcode;
     unsigned int left;
     unsigned int right;
+    unsigned int third;
     uint32_t immediate;
     unsigned int parameter_index;
     unsigned int left_block;
@@ -69,6 +71,8 @@ struct miga80_value_basic_block {
     unsigned int successor_count;
     unsigned int condition;
     enum miga80_value_terminator terminator;
+    unsigned int line;
+    unsigned int column;
 };
 
 struct miga80_value_function {

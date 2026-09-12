@@ -4,7 +4,13 @@
 and explicit `i32` conversions,
 immutable strings/symbols, typed locals, signed/unsigned integer division,
 controlled faults, normalized loops,
-`break`/`continue`, loop `phi`, `-O1`, and spills implemented
+`break`/`continue`, loop `phi`, `void`, observable `pset`, call-aware `-O1`,
+direct O1 vertical emission, and spills implemented
+
+The hosted F5 workflow now uses a guarded O1 profile with source-located
+backward-transfer budgets and a separate generated stack. Its 464-byte
+Mandelbrot image matches the guarded GNU oracle. The 404-byte O1 image below
+remains the unguarded baseline. See [workflow robustness](MIGA-80-workflow-robustness.md).
 
 ## Scope
 
@@ -13,21 +19,24 @@ claiming the version 1.0 grammar is frozen. Its accepted source is exactly one
 public typed function:
 
 ```ebnf
-function   = "function", name, "(", [ parameters ], ")", ":", value-type,
-             { statement }, return-statement, "end" ;
+function   = "function", name, "(", [ parameters ], ")", ":", result-type,
+             { statement }, [ return-statement ], "end" ;
 parameters = parameter, { ",", parameter } ;
 parameter  = name, ":", value-type ;
 value-type = integer-type | "fix" | "bool" | "string" | "symbol" ;
+result-type = value-type | "void" ;
 integer-type = "i8" | "u8" | "i16" | "u16" | "i32" ;
 statement  = local-declaration | control-statement ;
 control-statement = assignment | if-statement | while-statement
-                    | loop-control-statement ;
+                    | loop-control-statement | intrinsic-call ;
 local-declaration = "local", name, ":", value-type, "=", expression ;
 assignment = local-name, ( "=" | "/=" ), expression ;
 if-statement = "if", expression, "then", { control-statement },
                "else", { control-statement }, "end" ;
 while-statement = "while", expression, "do", { control-statement }, "end" ;
 loop-control-statement = "break" | "continue" ;
+intrinsic-call = "pset", "(", expression, ",", expression, ",",
+                 expression, ")" ;
 return-statement = "return", expression ;
 expression = sum, { ( "==" | "~=" | "!=" | "<" | "<=" | ">" | ">=" ), sum } ;
 sum        = product, { ( "+" | "-" ), product } ;
@@ -55,6 +64,8 @@ single or double quotes and accept `\\`, `\'`, `\"`, `\n`, `\r`, `\t`,
 `\0`, and `\xNN`; raw newlines are rejected. A function has at most 16
 function-scoped typed locals and 32 statements including nested branches and
 the final return.
+Semicolons are optional statement separators. A non-`void` function requires
+its final return; a `void` function reaches `end` without a value.
 Declarations require an initializer; a local is visible only after that
 initializer, cannot shadow a parameter or another local, and parameters are
 immutable. Types are exact. There is no general implicit conversion. The one
@@ -74,7 +85,7 @@ must terminate their immediate statement list; a following statement remains
 valid when it is reached through another branch of an enclosing `if`. The
 initial ABI supports at most three scalar parameters in `D0` through `D2` and
 two `string` parameters in `A0`/`A1`. A scalar result uses `D0`; a `string`
-result uses `A0`.
+result uses `A0`; `void` has no result register.
 Integer arithmetic wraps at the declared width. Signed integer `/` truncates toward zero and
 minimum-value divided by `-1` wraps to that minimum value; unsigned `/` uses
 ordinary unsigned division. A provably constant zero divisor is a compile-time
@@ -97,8 +108,9 @@ controlled fault 2 with the conversion's source location. `i32(value)` accepts
 only `fix`, truncates toward zero, and cannot overflow because every Q16.16
 integral part fits `i32`. Both forms fold when their input is constant.
 
-The version 1 language contract requires an explicit return annotation and
-includes `void`, but `void` code generation is not in this bootstrap tranche.
+The version 1 language contract requires an explicit return annotation.
+`void` is implemented by reaching the end of the function without a value;
+returning a value from it remains an error.
 `string` and `symbol` are implemented immutable value types. A string value is
 the canonical address of a read-only `{ u32 byte_length; byte payload[]; }`
 descriptor emitted in `.text`; it has no trailing-NUL requirement. Equivalent
@@ -111,9 +123,11 @@ pool merging and ID rewriting remain part of the future multi-function
 pack/link step. There are no `byte` or `word` aliases: the source spellings
 remain `i8`, `u8`, `i16`, and `u16`.
 
-Calls, conversions involving the narrow integer types, multiple functions,
-multiple returns, hexadecimal source literals, and the minimum `i32` literal
-spelling are likewise rejected rather than guessed.
+Calls are currently limited to statement-only `pset(i32, i32, u8)`, resolved
+statically to the trusted runtime service. Explicit conversions involving the
+narrow integer types, ordinary user calls, multiple functions, multiple
+returns, hexadecimal source literals, and the minimum `i32` literal spelling
+are likewise rejected rather than guessed.
 
 Arrays are not part of the bootstrap grammar yet. Their frozen version 1
 language contract is nevertheless zero-based: for `array<T, N>`, valid indices
@@ -156,8 +170,9 @@ The implementation has four bounded, host-buildable layers:
    folded operation remains removable. `phi` operands are edge-specific uses. Non-overlapping `phi` live
    regions reuse stack slots; edge transfers are scheduled as parallel copies,
    with one bounded temporary slot reserved only when a genuine copy cycle must
-   be broken. Calls will need an explicit side-effect rule before value
-   renaming crosses them.
+   be broken. Observable `pset` calls are liveness roots. An instruction-level
+   backward pass marks values crossing a call so the allocator places them in
+   callee-saved registers or spill slots instead of `D0-D2`.
 4. The development backend renders GNU m68k assembly. `-O0` retains fixed `A6`
    parameter/local slots and expression-stack temporaries as a baseline. The
    default `-O1` keeps current local and expression values in registers and
@@ -183,11 +198,18 @@ The implementation has four bounded, host-buildable layers:
    the high dividend/remainder, then uses bounded `DIVUL.L` plus 64/32-bit
    `DIVU.L` steps. O1 allocates ordinary values only in `D0-D4` for such a
    function and reserves `D5` only when a fixed quotient spills.
+   Calls stage their three scalar arguments on the aligned stack before loading
+   `D0-D2`, invoke the trusted service at `4(A5)`, and invalidate caller-saved
+   ownership. A focused Musashi fixture deliberately clobbers `D0-D2/A0-A1`
+   in the service and proves live `D3/D4` values survive.
 
 For the current local toolchain, GNU `m68k-amigaos-as` retains a relocatable
 Amiga object and `m68k-amigaos-objcopy` extracts the flat image consumed by
-Musashi. ELF linking, symbol-manifest loading, the shared low-level instruction
-model, and the shipping direct encoder remain later steps. The `-O0`
+Musashi. The shipping direct encoder now covers O0 stack IR and the O1 numeric
+plus `pset` value-IR subset used by the Mandelbrot ADF; its O1 bytes match the
+GNU route exactly. ELF linking, symbol-manifest loading, a fully shared
+low-level instruction model, and broader O1 direct coverage remain later
+steps. The `-O0`
 stack-heavy renderer remains a correctness oracle; see the [MIGA Lua Optimization
 Strategy](./MIGA-Lua-optimization-strategy.md).
 
@@ -216,6 +238,7 @@ Run native frontend/IR tests and the complete differential path:
 
 ```sh
 gmake compiler-abi-test compiler-test compiler-execute-test compiler-spill-test
+gmake compiler-encoder-musashi-test compiler-call-test
 ```
 
 Cross-build this same C99 compiler bootstrap for 68020/libnix and execute its
@@ -225,11 +248,12 @@ typed-IR evaluator under `vamos`:
 gmake compiler-amiga-test
 ```
 
-This proves that the bounded frontend, value optimizer, and assembly renderer
-already run as an Amiga program: the target and host builds must render
-byte-identical `-O1` assembly. It does not yet prove on-Amiga direct
-machine-code emission; the shipping encoder and instruction-cache
-synchronization remain later work.
+This proves that the bounded frontend, value optimizer, assembly renderer, and
+direct O1 encoder already run as Amiga programs: the target and host builds
+must produce byte-identical `-O1` assembly and a byte-identical 404-byte direct
+Mandelbrot image. The separate ADF regression additionally proves exact-range
+instruction-cache synchronization and native execution for that vertical
+subset.
 
 The differential tests preserve `-O0`/`-O1` assembly, relocatable objects, and
 flat binaries under the compiler pipeline build directories. Seven ordinary

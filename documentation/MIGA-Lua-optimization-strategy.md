@@ -4,7 +4,8 @@
 and explicit `i32` conversions,
 immutable strings/symbols, signed/unsigned integer division with controlled faults, normalized `break`/`continue` loops, cyclic
 CFG liveness, branch/loop `phi`, parallel edge copies, `-O1`, spilling, and
-frame layout implemented
+frame layout implemented; call-aware O1 allocation and direct O1 emission are
+implemented for the numeric/`pset` vertical slice
 
 MIGA Lua is a statically typed, ahead-of-time compiled dialect designed for
 native 68EC020/68020 code. Familiar Lua syntax is a usability goal. Dynamic Lua
@@ -23,11 +24,17 @@ The shipping compiler remains portable C99 built for the 68020. It processes
 one function at a time with bounded reusable arenas, compact integer indexes,
 and deterministic passes. It must not require an assembler, linker, garbage
 collector, unbounded recursion, or host-sized optimization data structures.
-The frontend, value-IR optimizer, and assembly renderer are cross-built with
+Large encoder and optimizer workspaces are allocated explicitly rather than
+placed on the small Amiga process stack; allocation failure is a compilation
+error and no partial image is executed.
+The frontend, value-IR optimizer, assembly renderer, and vertical direct
+encoder are cross-built with
 libnix and executed under `vamos` by `gmake compiler-amiga-test`. That test
-requires byte-identical textual assembly from the host and 68020 compiler
-builds. Direct native emission on the Amiga remains a separate later gate. The
-same target retains the bootstrap executable size in
+requires byte-identical textual assembly and a byte-identical 404-byte direct
+image from the host and 68020 compiler builds. The ADF vertical slice also
+performs direct O1 native emission on the Amiga for its numeric and `pset`
+subset. The same target retains the
+bootstrap executable size in
 `build/reports/compiler-amiga-size.txt` so compiler growth remains visible.
 
 ## IR memory budget
@@ -37,13 +44,14 @@ it does not materialize a token list. The bootstrap AST and IR arenas instead
 favor explicit, easily checked C99 records while the semantics are still
 moving. With the current 32-bit enum/index ABI, an AST node occupies 32 bytes,
 a typed stack-IR instruction 20 bytes, a stack-IR block 20 bytes, a value-IR
-instruction 48 bytes, and a value-IR block 40 bytes. A separate 128-byte
+instruction 52 bytes, and a value-IR block 40 bytes. The third value operand
+is used by three-argument calls. A separate 128-byte
 membership bitset table identifies structured loop regions without enlarging
 each block. The immutable pool is a 1,284-byte fixed record: 32 eight-byte
 entries plus 1,024 decoded payload bytes and two 16-bit counters. It is copied
 through the AST, stack IR, and value IR so each layer is independently valid.
 At all configured maxima, an `-O1` compilation with a 64 KiB source uses
-approximately 104 KiB for the source buffer, main arenas, CFG bitsets, and
+approximately 110 KiB for the source buffer, main arenas, CFG bitsets, and
 optimizer workspace, excluding libc buffers and the compiler's own stack.
 
 This is a measured design budget, not the final representation. Once the
@@ -97,6 +105,16 @@ branches may reuse locations. Used `D3-D7` registers are preserved once with
 `MOVEM`; expression values are not pushed to `A7`. Constant multiplication by
 two or three is strength-reduced when the available registers make that
 profitable.
+
+Observable intrinsic calls are liveness roots and are never deleted or moved.
+A backward instruction-level pass marks every value whose live range crosses
+a call. The allocator places those scalar values in callee-saved `D3-D7` or a
+spill slot, copies incoming `D0-D2` parameters when necessary, and invalidates
+caller-saved ownership at the call. Arguments are staged on the aligned stack
+before being loaded into `D0-D2`, so overlapping source and destination
+registers retain parallel-copy semantics. The call-aware regression makes
+`pset` deliberately clobber `D0-D2/A0-A1`, then verifies that two live
+parameters survive in `D3/D4`.
 
 Integer arithmetic preserves its declared `i8`, `u8`, `i16`, `u16`, or `i32`
 type. Narrow results are sign- or zero-extended after each wrapping operation,
@@ -165,8 +183,9 @@ slots; the loop corpus additionally verifies a real exchange cycle.
 Nested `break` and `continue` now target the nearest loop. A loop whose body
 always transfers to `break` has no actual backedge and is emitted as an acyclic
 region rather than retaining an unreachable latch. Declarations or returns
-inside control-flow bodies, copy propagation across joins, address-register
-allocation, and the shared low-level m68k model also remain pending. Global
+inside control-flow bodies, user-function calls, copy propagation across
+joins, address-register allocation, and a fully shared low-level m68k model
+also remain pending. Global
 value numbering, expensive
 interprocedural optimization, speculative dynamic typing, and exhaustive
 instruction scheduling remain excluded until measurements justify their
@@ -198,7 +217,10 @@ count.
   baseline.
 - `-O1` is the implemented default: bounded simplification, dead-value
   removal, instruction selection, CFG-aware liveness/allocation, `phi`-slot
-  coloring, and immediate-form selection.
+  coloring, call-aware placement, and immediate-form selection. The shipping
+  direct encoder currently covers the numeric operations and `pset` needed by
+  the vertical slice; the textual renderer remains the oracle for the broader
+  division, conversion, and immutable-value corpus.
 - A later `-O2` may spend more compile time on the host and capable profiles,
   but it must use the same semantics and ABI. It must never be required to run
   a cartridge on a stock A1200.
@@ -245,6 +267,14 @@ maximum callee stack bytes:
 | signed Q16.16 multiplication, comparison, wrapping, and CFG join | 196 / 57-58 / 28 | 104 / 25-26 / 16 |
 | signed Q16.16 `/` and `/=`, wrapping quotient, controlled faults | 300 / 16-101 / 28 | 164 / 10-55 / 8-16 |
 | explicit `fix(i32)` / `i32(fix)`, including range faults | 208 / 15-50 / 28-32 | 112 / 11-26 / 16 |
+| default Mandelbrot with 20,480 `pset` calls | 744 / 17,314,258 / 48 | 404 / 7,466,958 / 48 |
+
+The default Mandelbrot O1 image is 46% smaller than the direct O0 image and
+executes 57% fewer Musashi-counted instructions. Its direct bytes are exactly
+the 404 bytes produced through the GNU assembly route, and all paths produce
+framebuffer checksum `c4604fc7`. These figures do not predict physical A1200
+cycles. The focused 36-byte call-survival fixture executes 15 instructions and
+proves one `pset` call cannot destroy two inputs used after the call.
 
 The register-pressure corpus forces simultaneous `D3/D4` allocation and
 verifies their ABI preservation. A separate deliberately pressure-heavy value
@@ -254,13 +284,14 @@ for six edge inputs. The conversion corpus adds 12 returned values and four
 controlled faults after the fixed-division tranche, bringing the current
 Musashi compiler total to 168 executions.
 
-The `-Os` 68020/libnix compiler currently has a 70,872-byte linked
-text/data/BSS footprint (70,472 text, 280 data, 120 BSS). Its host and Amiga
+The `-Os` 68020/libnix compiler currently has an 81,988-byte linked
+text/data/BSS footprint (81,588 text, 280 data, 120 BSS). Its host and Amiga
 builds emit byte-identical ordinary, local-heavy, conditional, loop,
 loop-control, division, exact-width, immutable-value, fixed-point,
 fixed-division, conversion, and synthetic spilling `-O1` assembly. The
-conversion tranche adds 3,612 text bytes over the fixed-division compiler and
-no linked data/BSS bytes. This growth is recorded explicitly; the generated
+call-aware value IR and direct O1 encoder add 11,116 text bytes over the
+previous compiler without changing linked data/BSS. This growth is recorded
+explicitly; the generated
 fixed-point paths remain inline and call no runtime helper.
 Unconditional jumps to the physically next block are elided at both
 optimization levels. This

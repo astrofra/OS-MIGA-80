@@ -6,8 +6,8 @@
 #include <string.h>
 
 #include "compiler/abi/abi.h"
+#include "compiler/backend_m68k/optimized_internal.h"
 
-#define MIGA80_DATA_REGISTER_COUNT 8U
 #define MIGA80_SPILL_REGISTER_COUNT 7U
 #define MIGA80_SPILL_SCRATCH_REGISTER 7
 #define MIGA80_FIX_REGISTER_COUNT 6U
@@ -15,21 +15,11 @@
 #define MIGA80_FIX_DIV_REGISTER_COUNT 5U
 #define MIGA80_FIX_DIV_LOW_SCRATCH_REGISTER 5
 #define MIGA80_FIX_DIVISOR_SCRATCH_REGISTER 6
-#define MIGA80_NO_REGISTER (-1)
-#define MIGA80_NO_SPILL_SLOT UINT_MAX
 #define MIGA80_LIVE_WORD_BITS 32U
 #define MIGA80_LIVE_WORD_COUNT \
     ((MIGA80_MAX_VALUE_INSTRUCTIONS + MIGA80_LIVE_WORD_BITS - 1U) / \
      MIGA80_LIVE_WORD_BITS)
 #define MIGA80_NO_DEFINITION_BLOCK 0xffU
-
-struct allocation_plan {
-    int registers[MIGA80_MAX_VALUE_INSTRUCTIONS];
-    unsigned int spill_slots[MIGA80_MAX_VALUE_INSTRUCTIONS];
-    int saved_registers[MIGA80_DATA_REGISTER_COUNT];
-    unsigned int spill_slot_count;
-    unsigned int phi_temporary_slot;
-};
 
 struct cfg_liveness {
     uint32_t block_use[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
@@ -37,6 +27,7 @@ struct cfg_liveness {
     uint32_t live_in[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
     uint32_t live_out[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
     uint32_t phi_live_blocks[MIGA80_MAX_VALUE_INSTRUCTIONS];
+    unsigned char crosses_call[MIGA80_MAX_VALUE_INSTRUCTIONS];
     unsigned int last_use[MIGA80_MAX_VALUE_INSTRUCTIONS];
     unsigned char definition_block[MIGA80_MAX_VALUE_INSTRUCTIONS];
 };
@@ -80,6 +71,7 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
             opcode <= MIGA80_VALUE_GE_U32) ||
+           opcode == MIGA80_VALUE_CALL_PSET ||
            opcode == MIGA80_VALUE_PHI;
 }
 
@@ -93,7 +85,13 @@ static int opcode_has_right(enum miga80_value_opcode opcode)
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
             opcode <= MIGA80_VALUE_GE_U32) ||
+           opcode == MIGA80_VALUE_CALL_PSET ||
            opcode == MIGA80_VALUE_PHI;
+}
+
+static int opcode_has_third(enum miga80_value_opcode opcode)
+{
+    return opcode == MIGA80_VALUE_CALL_PSET;
 }
 
 static int opcode_is_commutative(enum miga80_value_opcode opcode)
@@ -136,11 +134,15 @@ static int validate_value_function(
     unsigned int index;
 
     if (function->parameter_count > MIGA80_MAX_PARAMETERS ||
-        !miga80_type_is_value(function->result_type) ||
+        (function->result_type != MIGA80_TYPE_VOID &&
+         !miga80_type_is_value(function->result_type)) ||
         function->value_count == 0U ||
         function->value_count > MIGA80_MAX_VALUE_INSTRUCTIONS ||
-        function->result >= function->value_count ||
-        !function->values[function->result].live ||
+        (function->result_type != MIGA80_TYPE_VOID &&
+         (function->result >= function->value_count ||
+          !function->values[function->result].live)) ||
+        (function->result_type == MIGA80_TYPE_VOID &&
+         function->result != MIGA80_INVALID_VALUE) ||
         function->block_count == 0U ||
         function->block_count > MIGA80_MAX_BASIC_BLOCKS ||
         function->block_order_count != function->block_count ||
@@ -204,7 +206,9 @@ static int validate_value_function(
         if (!value->live) {
             continue;
         }
-        if (!miga80_type_is_value(value->type) ||
+        if ((value->opcode == MIGA80_VALUE_CALL_PSET
+                 ? value->type != MIGA80_TYPE_VOID
+                 : !miga80_type_is_value(value->type)) ||
             value->opcode < MIGA80_VALUE_CONSTANT ||
             value->opcode > MIGA80_VALUE_PHI) {
             return fail(diagnostic, value->line, value->column,
@@ -219,7 +223,8 @@ static int validate_value_function(
         }
         if (value->opcode != MIGA80_VALUE_PHI &&
             ((opcode_has_left(value->opcode) && value->left >= index) ||
-             (opcode_has_right(value->opcode) && value->right >= index))) {
+             (opcode_has_right(value->opcode) && value->right >= index) ||
+             (opcode_has_third(value->opcode) && value->third >= index))) {
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 value operand");
         }
@@ -317,6 +322,13 @@ static int validate_value_function(
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 parameter index");
         }
+        if (value->opcode == MIGA80_VALUE_CALL_PSET &&
+            (function->values[value->left].type != MIGA80_TYPE_I32 ||
+             function->values[value->right].type != MIGA80_TYPE_I32 ||
+             function->values[value->third].type != MIGA80_TYPE_U8)) {
+            return fail(diagnostic, value->line, value->column,
+                        "invalid O1 pset call");
+        }
         if (value->opcode == MIGA80_VALUE_PHI &&
             (value->left_block >= function->block_count ||
              value->right_block >= function->block_count ||
@@ -358,7 +370,8 @@ static int validate_value_function(
             }
         }
     }
-    if (function->values[function->result].type != function->result_type) {
+    if (function->result_type != MIGA80_TYPE_VOID &&
+        function->values[function->result].type != function->result_type) {
         return fail(diagnostic, 0U, 0U, "invalid O1 result type");
     }
     return 1;
@@ -374,6 +387,12 @@ static void live_set_insert(uint32_t *set, unsigned int value)
 {
     set[value / MIGA80_LIVE_WORD_BITS] |=
         UINT32_C(1) << (value % MIGA80_LIVE_WORD_BITS);
+}
+
+static void live_set_remove(uint32_t *set, unsigned int value)
+{
+    set[value / MIGA80_LIVE_WORD_BITS] &=
+        ~(UINT32_C(1) << (value % MIGA80_LIVE_WORD_BITS));
 }
 
 static void add_block_use(struct cfg_liveness *liveness,
@@ -455,12 +474,16 @@ static int build_cfg_liveness(
                 if (opcode_has_right(value->opcode)) {
                     add_block_use(liveness, block_index, value->right);
                 }
+                if (opcode_has_third(value->opcode)) {
+                    add_block_use(liveness, block_index, value->third);
+                }
             }
             live_set_insert(liveness->block_def[block_index], value_index);
         }
         if (block->terminator == MIGA80_VALUE_BRANCH) {
             add_block_use(liveness, block_index, block->condition);
-        } else if (block->terminator == MIGA80_VALUE_RETURN) {
+        } else if (block->terminator == MIGA80_VALUE_RETURN &&
+                   function->result_type != MIGA80_TYPE_VOID) {
             add_block_use(liveness, block_index, function->result);
         }
     }
@@ -514,6 +537,54 @@ static int build_cfg_liveness(
                         "O1 CFG liveness did not converge");
         }
     } while (changed);
+
+    for (block_index = 0U; block_index < function->block_count;
+         ++block_index) {
+        const struct miga80_value_basic_block *block =
+            &function->blocks[block_index];
+        uint32_t live[MIGA80_LIVE_WORD_COUNT];
+        unsigned int offset = block->value_count;
+
+        (void)memcpy(live, liveness->live_out[block_index], sizeof(live));
+        if (block->terminator == MIGA80_VALUE_BRANCH) {
+            live_set_insert(live, block->condition);
+        } else if (block->terminator == MIGA80_VALUE_RETURN &&
+                   function->result_type != MIGA80_TYPE_VOID) {
+            live_set_insert(live, function->result);
+        }
+        while (offset > 0U) {
+            const unsigned int value_index =
+                block->first_value + --offset;
+            const struct miga80_value_instruction *value =
+                &function->values[value_index];
+
+            if (!value->live) {
+                continue;
+            }
+            live_set_remove(live, value_index);
+            if (value->opcode == MIGA80_VALUE_CALL_PSET) {
+                unsigned int live_value;
+
+                for (live_value = 0U; live_value < function->value_count;
+                     ++live_value) {
+                    if (live_set_contains(live, live_value)) {
+                        liveness->crosses_call[live_value] = 1U;
+                    }
+                }
+            }
+            if (value->opcode != MIGA80_VALUE_PHI) {
+                if (opcode_has_left(value->opcode)) {
+                    live_set_insert(live, value->left);
+                }
+                if (opcode_has_right(value->opcode)) {
+                    live_set_insert(live, value->right);
+                }
+                if (opcode_has_third(value->opcode)) {
+                    live_set_insert(live, value->third);
+                }
+            }
+        }
+    }
 
     for (index = 0U; index < function->value_count; ++index) {
         if (function->values[index].live &&
@@ -719,15 +790,16 @@ static int reserve_phi_temporary_if_needed(
 
 static int find_free_register(const unsigned int *owners,
                               unsigned int register_count,
-                              unsigned int preferred)
+                              unsigned int preferred,
+                              unsigned int minimum)
 {
     unsigned int reg;
 
-    if (preferred < register_count &&
+    if (preferred >= minimum && preferred < register_count &&
         owners[preferred] == MIGA80_INVALID_VALUE) {
         return (int)preferred;
     }
-    for (reg = 0U; reg < register_count; ++reg) {
+    for (reg = minimum; reg < register_count; ++reg) {
         if (owners[reg] == MIGA80_INVALID_VALUE) {
             return (int)reg;
         }
@@ -799,16 +871,29 @@ static int build_allocation_plan(
                                     "O1 scalar parameter register is invalid");
                     }
                     reg = (unsigned int)(abi_register - MIGA80_ABI_D0);
-                } else {
-                    for (reg = 0U; reg < register_count; ++reg) {
-                        if (parameter_owners[reg] == MIGA80_INVALID_VALUE) {
-                            break;
+                    if (liveness->crosses_call[index]) {
+                        const int saved = find_free_register(
+                            parameter_owners, register_count,
+                            MIGA80_DATA_REGISTER_COUNT, 3U);
+
+                        if (saved == MIGA80_NO_REGISTER) {
+                            return fail(
+                                diagnostic, value->line, value->column,
+                                "O1 call-crossing parameter has no register");
                         }
+                        reg = (unsigned int)saved;
                     }
-                    if (reg == register_count) {
+                } else {
+                    const int selected = find_free_register(
+                        parameter_owners, register_count,
+                        MIGA80_DATA_REGISTER_COUNT,
+                        liveness->crosses_call[index] ? 3U : 0U);
+
+                    if (selected == MIGA80_NO_REGISTER) {
                         return fail(diagnostic, value->line, value->column,
                                     "O1 address parameter has no data register");
                     }
+                    reg = (unsigned int)selected;
                 }
                 if (reg >= register_count ||
                     parameter_owners[reg] != MIGA80_INVALID_VALUE) {
@@ -887,11 +972,15 @@ static int build_allocation_plan(
             if (opcode_has_right(value->opcode)) {
                 liveness->last_use[value->right] = value_index;
             }
+            if (opcode_has_third(value->opcode)) {
+                liveness->last_use[value->third] = value_index;
+            }
         }
         if (block->terminator == MIGA80_VALUE_BRANCH) {
             liveness->last_use[block->condition] =
                 block->first_value + block->value_count;
-        } else if (block->terminator == MIGA80_VALUE_RETURN) {
+        } else if (block->terminator == MIGA80_VALUE_RETURN &&
+                   function->result_type != MIGA80_TYPE_VOID) {
             liveness->last_use[function->result] =
                 block->first_value + block->value_count;
         }
@@ -948,6 +1037,21 @@ static int build_allocation_plan(
                 value->opcode == MIGA80_VALUE_PHI) {
                 continue;
             }
+            if (value->opcode == MIGA80_VALUE_CALL_PSET) {
+                for (owner_index = 0U;
+                     owner_index < 3U && owner_index < register_count;
+                     ++owner_index) {
+                    const unsigned int owner = owners[owner_index];
+
+                    if (owner != MIGA80_INVALID_VALUE &&
+                        liveness->crosses_call[owner]) {
+                        return fail(diagnostic, value->line, value->column,
+                                    "O1 caller-saved value crosses call");
+                    }
+                    owners[owner_index] = MIGA80_INVALID_VALUE;
+                }
+                continue;
+            }
             if (opcode_has_left(value->opcode)) {
                 left_register = plan->registers[value->left];
             }
@@ -963,10 +1067,14 @@ static int build_allocation_plan(
                     MIGA80_VALUE_CONSTANT &&
                 function->values[value->right].immediate == 3U) {
                 destination =
-                    find_free_register(owners, register_count, preferred);
+                    find_free_register(
+                        owners, register_count, preferred,
+                        liveness->crosses_call[value_index] ? 3U : 0U);
             }
             if (destination == MIGA80_NO_REGISTER &&
                 left_register != MIGA80_NO_REGISTER &&
+                (!liveness->crosses_call[value_index] ||
+                 left_register >= 3) &&
                 value_dies_at(liveness, block_index, value->left,
                               value_index)) {
                 destination = left_register;
@@ -974,13 +1082,17 @@ static int build_allocation_plan(
             if (destination == MIGA80_NO_REGISTER &&
                 opcode_is_commutative(value->opcode) &&
                 right_register != MIGA80_NO_REGISTER &&
+                (!liveness->crosses_call[value_index] ||
+                 right_register >= 3) &&
                 value_dies_at(liveness, block_index, value->right,
                               value_index)) {
                 destination = right_register;
             }
             if (destination == MIGA80_NO_REGISTER) {
                 destination =
-                    find_free_register(owners, register_count, preferred);
+                    find_free_register(
+                        owners, register_count, preferred,
+                        liveness->crosses_call[value_index] ? 3U : 0U);
             }
             if (destination == MIGA80_NO_REGISTER) {
                 unsigned int slot;
@@ -1457,6 +1569,45 @@ static int emit_comparison(FILE *output,
                        data_register_name(destination));
 }
 
+static int emit_call_argument(
+    FILE *output, const struct miga80_value_function *function,
+    const struct allocation_plan *plan, unsigned int source)
+{
+    const struct miga80_value_instruction *value = &function->values[source];
+
+    if (value->opcode == MIGA80_VALUE_CONSTANT) {
+        return output_line(output, "        move.l  #0x%08x,-(%%a7)\n",
+                           (unsigned int)value->immediate);
+    }
+    if (plan->registers[source] != MIGA80_NO_REGISTER) {
+        return output_line(output, "        move.l  %s,-(%%a7)\n",
+                           data_register_name(plan->registers[source]));
+    }
+    if (plan->spill_slots[source] != MIGA80_NO_SPILL_SLOT) {
+        return output_line(output, "        move.l  -%u(%%a6),-(%%a7)\n",
+                           spill_offset(plan, source));
+    }
+    return 0;
+}
+
+static int emit_pset_call(FILE *output,
+                          const struct miga80_value_function *function,
+                          const struct allocation_plan *plan,
+                          const struct miga80_value_instruction *value)
+{
+    return emit_call_argument(output, function, plan, value->left) &&
+           emit_call_argument(output, function, plan, value->right) &&
+           emit_call_argument(output, function, plan, value->third) &&
+           output_line(
+               output,
+               "        move.l  (%%a7)+,%%d2\n"
+               "        move.l  (%%a7)+,%%d1\n"
+               "        move.l  (%%a7)+,%%d0\n"
+               "        movea.l %u(%%a5),%%a0\n"
+               "        jsr     (%%a0)\n",
+               MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET);
+}
+
 static int emit_value(FILE *output,
                       const struct miga80_value_function *function,
                       const struct allocation_plan *plan, unsigned int index)
@@ -1467,6 +1618,10 @@ static int emit_value(FILE *output,
                                 : MIGA80_SPILL_SCRATCH_REGISTER;
     unsigned int source = value->right;
     int emitted;
+
+    if (value->opcode == MIGA80_VALUE_CALL_PSET) {
+        return emit_pset_call(output, function, plan, value);
+    }
 
     if (value->opcode == MIGA80_VALUE_NEG) {
         emitted =
@@ -1812,7 +1967,7 @@ static int emit_epilogue(FILE *output, const char *saved_registers,
     return output_line(output, "        rts\n");
 }
 
-static int emit_address_parameter_copies(
+static int emit_parameter_copies(
     FILE *output, const struct miga80_value_function *function,
     const struct allocation_plan *plan)
 {
@@ -1822,19 +1977,30 @@ static int emit_address_parameter_copies(
         const struct miga80_value_instruction *value =
             &function->values[index];
 
-        if (value->live && value->opcode == MIGA80_VALUE_PARAMETER &&
-            miga80_type_is_address(value->type)) {
+        if (value->live && value->opcode == MIGA80_VALUE_PARAMETER) {
             enum miga80_abi_register abi_register;
             const char *source_name;
             const unsigned int class_index = parameter_class_index(
-                function->parameter_types, value->parameter_index, 1);
+                function->parameter_types, value->parameter_index,
+                miga80_type_is_address(value->type));
 
-            if (!miga80_abi_address_argument_register(class_index,
-                                                       &abi_register) ||
+            if (!(miga80_type_is_address(value->type)
+                      ? miga80_abi_address_argument_register(class_index,
+                                                             &abi_register)
+                      : miga80_abi_scalar_argument_register(class_index,
+                                                            &abi_register)) ||
                 (source_name = miga80_abi_gnu_register_name(abi_register)) ==
                     NULL ||
-                plan->registers[index] == MIGA80_NO_REGISTER ||
-                !output_line(output, "        move.l  %s,%s\n", source_name,
+                plan->registers[index] == MIGA80_NO_REGISTER) {
+                return 0;
+            }
+            if (abi_register >= MIGA80_ABI_D0 &&
+                abi_register <= MIGA80_ABI_D7 &&
+                plan->registers[index] ==
+                    (int)(abi_register - MIGA80_ABI_D0)) {
+                continue;
+            }
+            if (!output_line(output, "        move.l  %s,%s\n", source_name,
                              data_register_name(plan->registers[index]))) {
                 return 0;
             }
@@ -1866,12 +2032,55 @@ static int emit_address_return(
     return 0;
 }
 
+int miga80_m68k_o1_backward_edge(const struct miga80_value_function *function,
+                                unsigned int predecessor,
+                                unsigned int successor)
+{
+    unsigned int index;
+
+    /* Every cycle crosses at least one edge to an equal/earlier block in
+     * emission order, including empty self-loops and continue funnels. */
+    for (index = 0U; index < function->block_order_count; ++index) {
+        if (function->block_order[index] == successor) {
+            return 1;
+        }
+        if (function->block_order[index] == predecessor) {
+            return 0;
+        }
+    }
+    return 0; /* The allocation-plan validator rejects missing blocks. */
+}
+
 static int emit_jump_edge(FILE *output,
                           const struct miga80_value_function *function,
                           const struct allocation_plan *plan,
                           unsigned int predecessor,
                           unsigned int successor, int branch_required)
 {
+    if (plan->guarded &&
+        miga80_m68k_o1_backward_edge(function, predecessor, successor)) {
+        const struct miga80_value_basic_block *block =
+            &function->blocks[predecessor];
+
+        if (!output_line(output,
+                "        tst.l   %u(%%a5)\n"
+                "        bne.s   .L_%s_budget_%u_%u\n"
+                "        moveq   #%u,%%d0\n"
+                "        move.l  #%u,%%d1\n"
+                "        move.l  #%u,%%d2\n"
+                "        movea.l %u(%%a5),%%a0\n"
+                "        jmp     (%%a0)\n"
+                ".L_%s_budget_%u_%u:\n"
+                "        subq.l  #1,%u(%%a5)\n",
+                MIGA80_ABI_RUNTIME_BUDGET_OFFSET,
+                function->name, predecessor, successor,
+                MIGA80_ABI_FAULT_EXECUTION_BUDGET, block->line, block->column,
+                MIGA80_ABI_RUNTIME_FAULT_HANDLER_OFFSET,
+                function->name, predecessor, successor,
+                MIGA80_ABI_RUNTIME_BUDGET_OFFSET)) {
+            return 0;
+        }
+    }
     return emit_phi_edge(output, function, plan, predecessor, successor) &&
            (!branch_required ||
             output_line(output, "        bra     .L_%s_b%u\n", function->name,
@@ -1962,9 +2171,9 @@ static int emit_allocated_function(
                      saved_registers)) {
         return fail(diagnostic, 0U, 0U, "unable to write O1 prologue");
     }
-    if (!emit_address_parameter_copies(output, function, plan)) {
+    if (!emit_parameter_copies(output, function, plan)) {
         return fail(diagnostic, 0U, 0U,
-                    "unable to copy O1 address parameters");
+                    "unable to copy O1 parameters");
     }
 
     for (order_index = 0U; order_index < function->block_order_count;
@@ -2009,9 +2218,12 @@ static int emit_allocated_function(
             }
         } else {
             const int returned =
-                function->result_type == MIGA80_TYPE_STRING
-                    ? emit_address_return(output, function, plan)
-                    : emit_move(output, function, plan, function->result, 0);
+                function->result_type == MIGA80_TYPE_VOID
+                    ? 1
+                    : (function->result_type == MIGA80_TYPE_STRING
+                           ? emit_address_return(output, function, plan)
+                           : emit_move(output, function, plan,
+                                       function->result, 0));
 
             if (!returned ||
                 !emit_epilogue(output, saved_registers, frame_size)) {
@@ -2090,20 +2302,21 @@ static int emit_allocated_function(
     return 1;
 }
 
-int miga80_emit_gnu_m68k_o1(FILE *output,
-                            const struct miga80_value_function *function,
-                            struct miga80_diagnostic *diagnostic)
+int miga80_prepare_m68k_o1_plan(
+    const struct miga80_value_function *function,
+    struct allocation_plan **result,
+    struct miga80_diagnostic *diagnostic)
 {
     struct optimizer_workspace *workspace;
     struct allocation_plan *plan;
     struct cfg_liveness *liveness;
     unsigned int register_count = MIGA80_DATA_REGISTER_COUNT;
     unsigned int index;
-    int emitted;
 
-    if (output == NULL || function == NULL || diagnostic == NULL) {
+    if (function == NULL || result == NULL || diagnostic == NULL) {
         return 0;
     }
+    *result = NULL;
     (void)memset(diagnostic, 0, sizeof(*diagnostic));
     if (!validate_value_function(function, diagnostic)) {
         return 0;
@@ -2164,7 +2377,45 @@ int miga80_emit_gnu_m68k_o1(FILE *output,
             }
         }
     }
+    *result = plan;
+    return 1;
+}
+
+void miga80_release_m68k_o1_plan(struct allocation_plan *plan)
+{
+    free(plan);
+}
+
+static int emit_gnu_m68k_o1(FILE *output,
+                            const struct miga80_value_function *function,
+                            int guarded,
+                            struct miga80_diagnostic *diagnostic)
+{
+    struct allocation_plan *plan = NULL;
+    int emitted;
+
+    if (output == NULL || function == NULL || diagnostic == NULL) {
+        return 0;
+    }
+    if (!miga80_prepare_m68k_o1_plan(function, &plan, diagnostic)) {
+        return 0;
+    }
+    plan->guarded = guarded;
     emitted = emit_allocated_function(output, function, plan, diagnostic);
-    free(workspace);
+    miga80_release_m68k_o1_plan(plan);
     return emitted;
+}
+
+int miga80_emit_gnu_m68k_o1(FILE *output,
+                            const struct miga80_value_function *function,
+                            struct miga80_diagnostic *diagnostic)
+{
+    return emit_gnu_m68k_o1(output, function, 0, diagnostic);
+}
+
+int miga80_emit_gnu_m68k_o1_guarded(
+    FILE *output, const struct miga80_value_function *function,
+    struct miga80_diagnostic *diagnostic)
+{
+    return emit_gnu_m68k_o1(output, function, 1, diagnostic);
 }

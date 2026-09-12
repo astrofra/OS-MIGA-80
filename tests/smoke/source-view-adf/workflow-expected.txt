@@ -1,0 +1,11 @@
+miga80_workflow_report=1
+rounds=3
+compile_run_cycles=13
+compile_error_recovery=pass
+budget_recovery=pass
+forced_fault_recovery=pass
+source_return=pass
+repeated_mandelbrot=pass
+memory_no_growth=pass
+hosted_cleanup=pass
+result=pass

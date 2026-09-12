@@ -99,6 +99,23 @@ The shim may clobber `D0-D2`, `A0-A1`, and condition codes and must preserve
 all other MIGA-80 callee-saved state. Addresses used by the Musashi harness
 are test configuration and are not ABI constants.
 
+The compatible guarded profile extends the context to 36 bytes. Offsets and
+fault codes are shared with the assembly trampoline in `compiler/abi/runtime.h`:
+
+| Offset | Guarded profile field |
+|---:|---|
+| `12` | Mutable unsigned backward-transfer budget |
+| `16` | Dedicated generated-stack top |
+| `20` | Saved host stack pointer, owned by the trampoline |
+| `24` | Last controlled fault code; zero on normal completion |
+| `28` | Fault source line |
+| `32` | Fault source column |
+
+Guarded O1 emission requires this profile even without graphics. Each backward
+edge checks for zero before decrementing, changes only CCR on the permitted
+path, and reports fault 3 through the core handler on exhaustion. Unguarded
+O0/O1 oracle images retain their original context requirements.
+
 ## Stack and frame contract
 
 - The stack grows toward lower addresses and has no red zone.
@@ -113,9 +130,11 @@ are test configuration and are not ABI constants.
 - Before `RTS`, a function restores every callee-saved register and restores
   `A7` to its entry value. After `RTS`, the caller observes its pre-call `A7`.
 
-The shipping runtime will enter generated code on a dedicated guarded stack.
-Its trampoline, static call-depth calculation, overflow protocol, stop checks,
-and context layout are not implied by the synthetic Musashi stack addresses.
+The shipping vertical runtime enters generated code on a dedicated guarded
+4 KiB stack after checking the direct encoder's conservative stack requirement.
+The compiler uses its separate 32 KiB stack. Future user-call depth and
+responsive stop checks remain extensions; synthetic Musashi stack addresses
+are not ABI constants.
 
 ## Calls and returns
 
@@ -153,6 +172,7 @@ The defined ABI 0.6 fault codes are:
 |---:|---|
 | `1` | Numeric division by zero |
 | `2` | Explicit numeric conversion out of range |
+| `3` | Execution budget exhausted (guarded profile) |
 
 A function with a dynamic divisor tests it before the selected integer or
 fixed-point division sequence. Its cold fault site loads `D1` and `D2`, joins
@@ -166,10 +186,10 @@ location to a shared function-local conversion-fault tail. A constant outside
 the accepted range is rejected during compilation. `i32(fix)` cannot fault.
 
 The handler does not return through the generated function's active frame. The
-shipping runtime trampoline will restore its saved host stack and transfer
-control back to MIGA-80. That trampoline implementation remains pending, but
-its generated-code entry contract is fixed here. The Musashi harness models it
-with a private sentinel address; that address is test configuration, not ABI.
+shipping runtime trampoline restores its saved host stack and the full Amiga C
+preserved register set before returning the fault code to MIGA-80. The ordinary
+compiler tests retain a private fault sentinel. The workflow suite additionally
+executes the real trampoline, including an abandoned frame on the private stack.
 
 ## Immutable `string` and `symbol` ABI
 
@@ -256,9 +276,15 @@ positive and negative `i32(fix)` truncation toward zero, constant folding,
 and two source-located out-of-range faults at both optimization levels. The
 optimizer retains a checked conversion whose result is overwritten because
 the fault remains observable.
+The call-survival corpus passes `x`, `y`, and `color` in `D0-D2`, invokes the
+`pset` entry at `4(A5)`, and then returns `x + y`. Its Musashi service mock
+deliberately overwrites `D0-D2/A0-A1`; both the GNU O1 route and the
+byte-identical 36-byte direct O1 image still return 12 for inputs 7 and 5,
+proving that call-crossing values were moved to preserved `D3/D4`.
 
 Run the host contract and generated-code checks with:
 
 ```sh
 gmake compiler-abi-test miga68k-test compiler-execute-test compiler-spill-test
+gmake compiler-call-test
 ```

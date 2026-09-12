@@ -4,18 +4,26 @@
 #include <string.h>
 
 #include "compiler/backend_m68k/encoder.h"
+#include "compiler/backend_m68k/backend.h"
 #include "compiler/frontend/frontend.h"
 #include "compiler/ir/ir.h"
+#include "compiler/value_ir/value_ir.h"
 
 #define TEST_SOURCE_CAPACITY 4096U
 #define TEST_CODE_CAPACITY 4096U
 #define TEST_WIDTH 256U
 #define TEST_HEIGHT 256U
 
+static char test_source[TEST_SOURCE_CAPACITY + 1U];
+static uint8_t test_code_o0[TEST_CODE_CAPACITY];
+static uint8_t test_code_o1[TEST_CODE_CAPACITY];
+
 struct pixel_oracle {
     uint8_t pixels[TEST_WIDTH * TEST_HEIGHT];
     uint32_t calls;
 };
+
+static struct pixel_oracle test_oracle;
 
 static uint32_t checksum(const void *bytes, size_t size)
 {
@@ -79,41 +87,144 @@ static int write_code(const char *path, const uint8_t *code,
     return success;
 }
 
-int main(int argc, char **argv)
+static int encode_o1_fixture(const char *source_path,
+                             const char *output_path, const char *assembly_path)
 {
-    char source[TEST_SOURCE_CAPACITY + 1U];
-    uint8_t code[TEST_CODE_CAPACITY];
     struct miga80_ast_function *ast;
     struct miga80_ir_function *ir;
+    struct miga80_value_function *value_ir;
     struct miga80_diagnostic diagnostic;
-    struct pixel_oracle oracle;
-    struct miga80_ir_runtime runtime;
-    uint32_t result = UINT32_MAX;
     size_t source_size;
     size_t code_size;
+    size_t required_stack_bytes = 0U;
+    unsigned int live_values = 0U;
+    unsigned int value_index;
     int success = 0;
 
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s source.lua output.bin\n", argv[0]);
-        return 2;
-    }
     ast = (struct miga80_ast_function *)malloc(sizeof(*ast));
     ir = (struct miga80_ir_function *)malloc(sizeof(*ir));
-    if (ast == NULL || ir == NULL ||
-        !read_source(argv[1], source, &source_size)) {
-        fprintf(stderr, "unable to prepare compiler encoder test\n");
+    value_ir =
+        (struct miga80_value_function *)malloc(sizeof(*value_ir));
+    if (ast == NULL || ir == NULL || value_ir == NULL ||
+        !read_source(source_path, test_source, &source_size)) {
+        fprintf(stderr, "unable to prepare O1 encoder fixture\n");
         goto cleanup;
     }
-    if (!miga80_parse_function(source, source_size, ast, &diagnostic) ||
+    if (!miga80_parse_function(test_source, source_size, ast, &diagnostic) ||
         !miga80_lower_function(ast, ir, &diagnostic) ||
-        !miga80_encode_m68k_o0(code, sizeof(code), ir, &code_size,
-                               &diagnostic)) {
+        !miga80_build_value_ir(ir, value_ir, &diagnostic) ||
+        !(assembly_path != NULL
+              ? miga80_encode_m68k_o1_guarded(
+                    test_code_o1, sizeof(test_code_o1), value_ir, &code_size,
+                    &required_stack_bytes, &diagnostic)
+              : miga80_encode_m68k_o1(test_code_o1, sizeof(test_code_o1),
+                                       value_ir, &code_size, &diagnostic))) {
         fprintf(stderr, "%u:%u: %s\n", diagnostic.line,
                 diagnostic.column, diagnostic.message);
         goto cleanup;
     }
-    (void)memset(&oracle, 0, sizeof(oracle));
-    runtime.context = &oracle;
+    if (!write_code(output_path, test_code_o1, code_size)) {
+        fprintf(stderr, "unable to write O1 encoder fixture\n");
+        goto cleanup;
+    }
+    if (assembly_path != NULL) {
+        FILE *assembly = fopen(assembly_path, "w");
+        int emitted;
+
+        if (assembly == NULL) {
+            goto cleanup;
+        }
+        emitted = miga80_emit_gnu_m68k_o1_guarded(assembly, value_ir,
+                                                 &diagnostic);
+        if (fclose(assembly) != 0 || !emitted) {
+            goto cleanup;
+        }
+        /* A failed bounded emission must leave caller-owned guards intact. */
+        (void)memset(test_code_o0, 0xa5, sizeof(test_code_o0));
+        if (miga80_encode_m68k_o1_guarded(
+                test_code_o0 + 4U, code_size - 1U, value_ir, &source_size,
+                &required_stack_bytes, &diagnostic) ||
+            test_code_o0[3] != 0xa5 ||
+            test_code_o0[code_size + 3U] != 0xa5) {
+            fprintf(stderr, "guarded encoder capacity check failed\n");
+            goto cleanup;
+        }
+        printf("required_stack_bytes=%lu\n",
+               (unsigned long)required_stack_bytes);
+    }
+    for (value_index = 0U; value_index < value_ir->value_count;
+         ++value_index) {
+        if (value_ir->values[value_index].live) {
+            ++live_values;
+        }
+    }
+    printf("source_bytes=%lu\n", (unsigned long)source_size);
+    printf("ir_instructions=%u\n", ir->instruction_count);
+    printf("ir_blocks=%u\n", ir->block_count);
+    printf("value_instructions=%u\n", value_ir->value_count);
+    printf("value_live_instructions=%u\n", live_values);
+    printf("o1_encoded_bytes=%lu\n", (unsigned long)code_size);
+    printf("o1_encoded_checksum=%08x\n",
+           (unsigned int)checksum(test_code_o1, code_size));
+    success = 1;
+
+cleanup:
+    free(value_ir);
+    free(ir);
+    free(ast);
+    return success;
+}
+
+int main(int argc, char **argv)
+{
+    struct miga80_ast_function *ast;
+    struct miga80_ir_function *ir;
+    struct miga80_value_function *value_ir;
+    struct miga80_diagnostic diagnostic;
+    struct miga80_ir_runtime runtime;
+    uint32_t result = UINT32_MAX;
+    size_t source_size;
+    size_t code_o0_size;
+    size_t code_o1_size;
+    unsigned int live_values = 0U;
+    unsigned int value_index;
+    int success = 0;
+
+    if (argc == 4 && strcmp(argv[1], "--o1") == 0) {
+        return encode_o1_fixture(argv[2], argv[3], NULL) ? 0 : 1;
+    }
+    if (argc == 5 && strcmp(argv[1], "--guarded") == 0) {
+        return encode_o1_fixture(argv[2], argv[3], argv[4]) ? 0 : 1;
+    }
+    if (argc != 4) {
+        fprintf(stderr,
+                "usage: %s source.lua output-o0.bin output-o1.bin\n"
+                "       %s --o1 source.lua output.bin\n",
+                argv[0], argv[0]);
+        return 2;
+    }
+    ast = (struct miga80_ast_function *)malloc(sizeof(*ast));
+    ir = (struct miga80_ir_function *)malloc(sizeof(*ir));
+    value_ir =
+        (struct miga80_value_function *)malloc(sizeof(*value_ir));
+    if (ast == NULL || ir == NULL || value_ir == NULL ||
+        !read_source(argv[1], test_source, &source_size)) {
+        fprintf(stderr, "unable to prepare compiler encoder test\n");
+        goto cleanup;
+    }
+    if (!miga80_parse_function(test_source, source_size, ast, &diagnostic) ||
+        !miga80_lower_function(ast, ir, &diagnostic) ||
+        !miga80_build_value_ir(ir, value_ir, &diagnostic) ||
+        !miga80_encode_m68k_o0(test_code_o0, sizeof(test_code_o0), ir,
+                               &code_o0_size, &diagnostic) ||
+        !miga80_encode_m68k_o1(test_code_o1, sizeof(test_code_o1), value_ir,
+                               &code_o1_size, &diagnostic)) {
+        fprintf(stderr, "%u:%u: %s\n", diagnostic.line,
+                diagnostic.column, diagnostic.message);
+        goto cleanup;
+    }
+    (void)memset(&test_oracle, 0, sizeof(test_oracle));
+    runtime.context = &test_oracle;
     runtime.pset = oracle_pset;
     if (!miga80_evaluate_ir_with_runtime(ir, NULL, 0U, &result, &runtime,
                                          &diagnostic)) {
@@ -121,7 +232,8 @@ int main(int argc, char **argv)
                 diagnostic.column, diagnostic.message);
         goto cleanup;
     }
-    if (!write_code(argv[2], code, code_size)) {
+    if (!write_code(argv[2], test_code_o0, code_o0_size) ||
+        !write_code(argv[3], test_code_o1, code_o1_size)) {
         fprintf(stderr, "unable to write direct encoder output\n");
         goto cleanup;
     }
@@ -131,15 +243,30 @@ int main(int argc, char **argv)
     printf("ast_statements=%u\n", ast->statement_count);
     printf("ir_instructions=%u\n", ir->instruction_count);
     printf("ir_blocks=%u\n", ir->block_count);
-    printf("encoded_bytes=%lu\n", (unsigned long)code_size);
-    printf("encoded_checksum=%08x\n", (unsigned int)checksum(code, code_size));
-    printf("oracle_pset_calls=%u\n", (unsigned int)oracle.calls);
+    for (value_index = 0U; value_index < value_ir->value_count;
+         ++value_index) {
+        if (value_ir->values[value_index].live) {
+            ++live_values;
+        }
+    }
+    printf("value_instructions=%u\n", value_ir->value_count);
+    printf("value_live_instructions=%u\n", live_values);
+    printf("o0_encoded_bytes=%lu\n", (unsigned long)code_o0_size);
+    printf("o0_encoded_checksum=%08x\n",
+           (unsigned int)checksum(test_code_o0, code_o0_size));
+    printf("o1_encoded_bytes=%lu\n", (unsigned long)code_o1_size);
+    printf("o1_encoded_checksum=%08x\n",
+           (unsigned int)checksum(test_code_o1, code_o1_size));
+    printf("oracle_pset_calls=%u\n", (unsigned int)test_oracle.calls);
     printf("oracle_framebuffer_checksum=%08x\n",
-           (unsigned int)checksum(oracle.pixels, sizeof(oracle.pixels)));
-    printf("result=%s\n", result == 0U ? "pass" : "fail");
-    success = result == 0U;
+           (unsigned int)checksum(test_oracle.pixels,
+                                  sizeof(test_oracle.pixels)));
+    printf("result=%s\n",
+           result == 0U && code_o1_size < code_o0_size ? "pass" : "fail");
+    success = result == 0U && code_o1_size < code_o0_size;
 
 cleanup:
+    free(value_ir);
     free(ir);
     free(ast);
     return success ? 0 : 1;

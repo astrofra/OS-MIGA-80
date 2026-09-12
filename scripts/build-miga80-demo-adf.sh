@@ -66,7 +66,7 @@ MIGA80_FONT_SHA256="$(/usr/bin/shasum -a 256 "$MIGA80_FONT" | /usr/bin/awk '{pri
   printf 'font_sha256=%s\n' "$MIGA80_FONT_SHA256"
   printf 'source_path=DATA/DEFAULT.LUA\n'
   printf 'font_path=DATA/FONT4X8.BIN\n'
-  printf 'boot_report_path=BOOTED.TXT\n'
+  printf 'runtime_report_path=RAM:MIGA80-BOOTED.TXT\n'
   printf '\nfilesystem_listing:\n'
   xdftool "$MIGA80_ADF" list
 } >"$MIGA80_MANIFEST"

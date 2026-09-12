@@ -3,7 +3,8 @@
 ## Fast compiler development without launching UAE
 
 **Status:** runner, exact-width typed compiler, signed/unsigned division,
-cyclic CFG/loop `phi` value-IR `-O1`, and spills implemented
+cyclic CFG/loop `phi` value-IR `-O1`, call-aware `pset`, direct O1 vertical
+emission, and spills implemented
 
 **Primary target:** stock Amiga 1200, 68EC020 at approximately 14 MHz  
 **Host platforms:** macOS, Linux, and Windows  
@@ -570,7 +571,8 @@ circular disassembly trace for failures. Run it with `gmake miga68k-test`.
 
 **Initial connection implemented:** `miga80c` parses one explicitly annotated
 `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`string`/`symbol` function with typed local declarations,
-assignments, signed/unsigned comparisons, integer division, Q16.16
+assignments, an explicit `void` result and statement-only `pset`,
+signed/unsigned comparisons, integer division, Q16.16
 multiplication/division, explicit `fix(i32)`/`i32(fix)`, statement-only `/=`,
 nested `if`/`else`, and nested `while`,
 lowers it to typed stack IR and value IR, renders GNU
@@ -581,7 +583,9 @@ and `break` sites are folded through binary merge funnels; O1 verifies that form
 and inserts typed branch and loop join values. The optimizer solves bounded per-block liveness, treats
 `phi` inputs as edge uses, reuses registers across exclusive branches,
 coalesces compatible `phi` slots, and schedules parallel edge copies with a
-bounded cycle-breaking temporary. The ordinary test path assembles both levels
+bounded cycle-breaking temporary. Observable calls are liveness roots; values
+crossing `pset` are assigned to preserved registers or spills, and its
+arguments are staged before loading caller-saved `D0-D2`. The ordinary test path assembles both levels
 for seven corpora and checks six inputs per corpus against Musashi. A
 signed-division corpus adds twelve normal executions and four controlled
 faults. An exact-width corpus adds twelve normal executions and two controlled
@@ -593,9 +597,11 @@ balance, and maximum stack use. Host and 68020 test programs must render
 ordinary, local-heavy, conditional, loop, loop-control, division, exact-width,
 immutable-value, fixed-point, fixed-division, conversion, and spilling
 assembly byte-identically.
-The current GNU toolchain
-retains an Amiga relocatable object; ELF linking, symbol manifests, and broader
-language semantics remain pending. See
+The current GNU toolchain retains an Amiga relocatable object. The shipping
+direct encoder covers the O0 stack IR and the O1 numeric/`pset` vertical
+subset; its 404-byte Mandelbrot and 36-byte call-survival images match the GNU
+route byte for byte and run under Musashi. ELF linking, symbol manifests,
+broader direct O1 coverage, and broader language semantics remain pending. See
 [MIGA Lua Compiler Bootstrap](./MIGA-Lua-compiler-bootstrap.md).
 
 - emit assembly for integer constants, arithmetic and return;
@@ -624,9 +630,11 @@ control. See
 
 - define register roles; **implemented for ABI 0.6**
 - add calls and source locals; **typed source locals, assignments, and
-  compiler-generated spill frames implemented; calls pending**
-- implement saved-register and stack guard checks; **implemented for the current
-  entry path; nested calls remain pending**
+  compiler-generated spill frames implemented; the trusted `pset` runtime call
+  is implemented and ordinary user calls remain pending**
+- implement saved-register and stack guard checks; **implemented for the entry
+  path and a caller-saved-clobbering `pset` fixture; nested user calls remain
+  pending**
 - define runtime traps; **division by zero is controlled fault 1 and numeric
   conversion out of range is controlled fault 2; other traps pending**
 - publish the ABI as a versioned document; **implemented for ABI 0.6**
@@ -695,8 +703,16 @@ and 51-55 instructions; O1 uses at most 16 stack bytes and preserves `D6-D7`.
 The conversion image falls from 208 bytes and 40-50 normal-path instructions
 to 112 bytes and 22-26 instructions; checked-fault paths fall from 15 to 11
 instructions and retain their source location. The `-Os` 68020/libnix compiler
-is 70,872 linked bytes (70,472 text, 280 data, 120 BSS), an increase of 3,612
-text bytes over the fixed-division tranche.
+is now 81,988 linked bytes (81,588 text, 280 data, 120 BSS). The call-aware
+value IR and direct O1 encoder added 11,116 text bytes over the previous
+compiler without changing linked data/BSS.
+
+The complete Mandelbrot regression adds 20,480 observable calls. Direct O1
+reduces its flat image from 744 to 404 bytes and its Musashi instruction count
+from 17,314,258 to 7,466,958 while preserving framebuffer checksum `c4604fc7`.
+A focused 36-byte fixture proves `D3/D4` values survive a service that
+deliberately clobbers `D0-D2/A0-A1`. These remain emulator regression counts,
+not physical A1200 cycle estimates.
 
 - record code size, instruction counts, and stack use; **implemented for the bootstrap**
 - add core-cycle estimates;

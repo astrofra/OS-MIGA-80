@@ -13,8 +13,9 @@ MIGA80_SNAPSHOT_ADF="$MIGA80_RUN_DIR/poll-snapshot.adf"
 MIGA80_CONFIG="$MIGA80_RUN_DIR/a1200-pal-source-view.fs-uae"
 MIGA80_REPORT="$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-fs-uae.txt"
 MIGA80_CANDIDATE_REPORT="$MIGA80_RUN_DIR/candidate-report.txt"
-MIGA80_AUTORUN_STARTUP="$MIGA80_RUN_DIR/Startup-Sequence.autorun"
+MIGA80_TEST_STARTUP="$MIGA80_RUN_DIR/Startup-Sequence.test"
 MIGA80_TIMEOUT_SECONDS="${MIGA80_FS_UAE_TIMEOUT_SECONDS:-45}"
+MIGA80_FAST_MEMORY="${MIGA80_FS_UAE_FAST_MEMORY:-0}"
 MIGA80_EMULATOR_PID=""
 
 stop_emulator() {
@@ -66,8 +67,11 @@ fi
 
 # shellcheck disable=SC1090
 source "$MIGA80_LOCAL_CONFIG"
-MIGA80_KICKSTART="${MIGA80_KICKSTART_30:-${MIGA80_KICKSTART_31:-}}"
-if [ -z "$MIGA80_KICKSTART" ] || [ ! -f "$MIGA80_KICKSTART" ]; then
+MIGA80_KICKSTART="${MIGA80_FS_UAE_KICKSTART:-\
+${MIGA80_KICKSTART_30:-${MIGA80_KICKSTART_31:-}}}"
+if [ -z "$MIGA80_KICKSTART" ] ||
+   { [ "$MIGA80_KICKSTART" != AROS ] &&
+     [ ! -f "$MIGA80_KICKSTART" ]; }; then
   printf 'Configure a licensed A1200 Kickstart 3.0 or 3.1 ROM.\n' >&2
   exit 1
 fi
@@ -82,6 +86,12 @@ if [ "$MIGA80_TIMEOUT_SECONDS" -eq 0 ]; then
   printf 'MIGA80_FS_UAE_TIMEOUT_SECONDS must be greater than zero.\n' >&2
   exit 1
 fi
+case "$MIGA80_FAST_MEMORY" in
+  ''|*[!0-9]*)
+    printf 'MIGA80_FS_UAE_FAST_MEMORY must be a non-negative integer.\n' >&2
+    exit 1
+    ;;
+esac
 
 /bin/mkdir -p "$MIGA80_RUN_DIR" "$(dirname "$MIGA80_REPORT")"
 /bin/cp "$MIGA80_SOURCE_ADF" "$MIGA80_RUN_ADF"
@@ -90,30 +100,36 @@ fi
 
 case "$MIGA80_MODE" in
   SOURCE)
-    ;;
-  AUTORUN)
     printf '%s\n' \
-      'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT AUTORUN' \
-      >"$MIGA80_AUTORUN_STARTUP"
-    xdftool -f "$MIGA80_RUN_ADF" \
-      delete S/Startup-Sequence + \
-      write "$MIGA80_AUTORUN_STARTUP" S/Startup-Sequence >/dev/null
+      'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
+  AUTORUN|SELFTEST)
+    printf '%s\n' \
+      "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
+      >"$MIGA80_TEST_STARTUP"
     ;;
   *)
     printf 'Unknown source-view test mode: %s\n' "$MIGA80_MODE" >&2
     exit 1
     ;;
 esac
+xdftool -f "$MIGA80_RUN_ADF" \
+  delete S/Startup-Sequence + \
+  write "$MIGA80_TEST_STARTUP" S/Startup-Sequence >/dev/null
 
 {
   printf '[fs-uae]\n'
   printf 'amiga_model = A1200\n'
+  printf 'accuracy = 1\n'
   printf 'chip_memory = 2048\n'
-  printf 'fast_memory = 0\n'
+  printf 'fast_memory = %s\n' "$MIGA80_FAST_MEMORY"
   printf 'ntsc_mode = 0\n'
   printf 'joystick_port_1 = none\n'
   printf 'automatic_input_grab = 0\n'
-  printf 'kickstart_file = %s\n' "$MIGA80_KICKSTART"
+  if [ "$MIGA80_KICKSTART" != AROS ]; then
+    printf 'kickstart_file = %s\n' "$MIGA80_KICKSTART"
+  fi
   printf 'floppy_drive_0 = %s\n' "$MIGA80_RUN_ADF"
   printf 'writable_floppy_images = 1\n'
 } >"$MIGA80_CONFIG"
@@ -129,7 +145,14 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
   /bin/cp "$MIGA80_RUN_ADF" "$MIGA80_SNAPSHOT_ADF"
   if xdftool "$MIGA80_SNAPSHOT_ADF" type BOOTED.TXT \
        >"$MIGA80_CANDIDATE_REPORT" 2>/dev/null; then
-    if [ "$MIGA80_MODE" = AUTORUN ]; then
+    if [ "$MIGA80_MODE" = SELFTEST ]; then
+      if /usr/bin/grep -q '^miga80_workflow_report=1$' \
+           "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
+           /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
+    elif [ "$MIGA80_MODE" = AUTORUN ]; then
       if /usr/bin/grep -q '^miga80_source_view_report=2$' \
            "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
@@ -163,5 +186,13 @@ fi
 printf 'PASS  standalone MIGA-80 ADF booted and opened the source view\n'
 printf 'PASS  AGA readback matches the canonical 4x8 source framebuffer\n'
 if [ "$MIGA80_MODE" = AUTORUN ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-autorun-fs-uae.txt"
   printf 'PASS  on-target source compilation and native execution completed\n'
+fi
+
+if [ "$MIGA80_MODE" = SELFTEST ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-workflow-fs-uae.txt"
+  printf 'PASS  repeated compile/run/fault/source cycles and cleanup completed\n'
 fi

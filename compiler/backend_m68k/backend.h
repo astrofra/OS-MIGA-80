@@ -12,6 +12,9 @@ int miga80_emit_gnu_m68k(FILE *output,
 int miga80_emit_gnu_m68k_o1(FILE *output,
                             const struct miga80_value_function *function,
                             struct miga80_diagnostic *diagnostic);
+int miga80_emit_gnu_m68k_o1_guarded(
+    FILE *output, const struct miga80_value_function *function,
+    struct miga80_diagnostic *diagnostic);
 int miga80_emit_gnu_m68k_fault_site(FILE *output, const char *function_name,
                                     unsigned int site,
                                     unsigned int line,

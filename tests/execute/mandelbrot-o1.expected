@@ -1,0 +1,1 @@
+PASS  mandelbrot native framebuffer=c4604fc7 pset_calls=20480 instructions=7466958 code_bytes=404 stack_bytes=48
