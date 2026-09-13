@@ -1413,3 +1413,23 @@ build/distribution/miga80-cube.adf: $(MIGA80_DEMO_PROGRAM) assets/demo/cube.lua 
 miga80-cube-fs-uae: build/distribution/miga80-cube.adf
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \
 		tests/smoke/source-view-adf/cube-expected.txt CUBETEST
+
+.PHONY: animation-chunky-test miga80-cube-chunky-adf miga80-cube-chunky-fs-uae
+animation-chunky-test: $(ANIMATION_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(PYTHON) scripts/test-animation.py $(ANIMATION_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
+		$(TARGET_CC) $(TARGET_AS) $(TARGET_OBJCOPY) assets/demo/cube-chunky.lua \
+		$(HOST_BUILD_DIR)/animation-chunky PIXEL >$(REPORT_DIR)/animation-chunky-host.txt
+	@cat $(REPORT_DIR)/animation-chunky-host.txt
+
+miga80-cube-chunky-adf: build/distribution/miga80-cube-chunky.adf
+build/distribution/miga80-cube-chunky.adf: $(MIGA80_DEMO_PROGRAM) assets/demo/cube-chunky.lua \
+        assets/demo/layers.lua assets/demo/Startup-Cube $(MIGA80_DEMO_README) \
+        $(FONT4X8_GENERATED_BINARY) LICENSE $(MIGA80_DEMO_ADF_BUILDER)
+	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) assets/demo/cube-chunky.lua \
+		$(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Cube $(MIGA80_DEMO_README) \
+		LICENSE $@ assets/demo/layers.lua assets/demo/cube-chunky.lua
+
+miga80-cube-chunky-fs-uae: build/distribution/miga80-cube-chunky.adf
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=360 $(MIGA80_DEMO_ADF_TESTER) $< \
+		tests/smoke/source-view-adf/cube-chunky-expected.txt CUBEPIXELTEST

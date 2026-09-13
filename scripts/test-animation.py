@@ -11,9 +11,14 @@ def run(*args, **kwargs):
 
 
 def main():
-    host, runner, cc, assembler, objcopy = sys.argv[1:]
-    out = pathlib.Path('build/host/animation')
-    report = run(host, 'assets/demo/cube.lua', out, capture_output=True).stdout
+    host, runner, cc, assembler, objcopy = sys.argv[1:6]
+    source_path = sys.argv[6] if len(sys.argv)>6 else 'assets/demo/cube.lua'
+    out = pathlib.Path(sys.argv[7] if len(sys.argv)>7 else 'build/host/animation')
+    layer = sys.argv[8] if len(sys.argv)>8 else 'PLANAR'
+    out.mkdir(parents=True, exist_ok=True)
+    if layer == 'PIXEL':
+        assert pathlib.Path(source_path).read_text() == pathlib.Path('assets/demo/cube.lua').read_text().replace('layer(PLANAR)', 'layer(PIXEL)')
+    report = run(host, source_path, out, layer, capture_output=True).stdout
     print(report, end='', flush=True)
     values = dict(line.split('=') for line in report.splitlines())
     colors = set()

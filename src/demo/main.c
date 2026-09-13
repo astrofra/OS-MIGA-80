@@ -1623,7 +1623,7 @@ static int write_stop_report(const char *path, int passed)
 }
 
 static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
-    const struct Miga80SourceViewMetrics *metrics)
+    const struct Miga80SourceViewMetrics *metrics, int pixel)
 {
     char *source = AllocMem(DEMO_SOURCE_CAPACITY + 1U, MEMF_PUBLIC);
     ULONG baseline = 0U;
@@ -1631,7 +1631,7 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
     int success = 0;
     if (source == NULL) { return 0; }
     (void)strcpy(source, source_buffer);
-    test_escape_delay = 500000U;
+    test_escape_delay = pixel ? 6000000U : 500000U;
     /* Stop after several displayed frames, then repeat without resource growth. */
     for (round = 0U; round < 3U; ++round) {
         workflow_failure = "cube_escape";
@@ -1642,12 +1642,16 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
             workflow_failure = "cube_stop_memory_growth"; goto done;
         }
     }
+    test_graphics = pixel; /* Full PF1/PF2 readback after timing is captured. */
     for (round = 0U; round < 2U; ++round) {
         enum demo_state state = DEMO_STATE_SOURCE;
         workflow_failure = "cube_native";
         if (workflow_key(screen, chunky, metrics, NULL, &state, DEMO_RAWKEY_F5, 0U) != 0 ||
             state != DEMO_STATE_RESULT || last_animation_frames < 2U ||
-            last_planar_lines != last_animation_frames * 12U ||
+            last_planar_lines != (pixel ? 0U : last_animation_frames * 12U) ||
+            (pixel && (!last_graphics_readback ||
+                last_framebuffer_checksum == UINT32_C(0x5e509dc5) ||
+                last_planar_checksum != UINT32_C(0xefb69dc5))) ||
             last_animation_elapsed < 10U * 65536U || last_animation_elapsed >= 11U * 65536U ||
             !verify_display_palette()) { goto done; }
         workflow_failure = "cube_source_return";
@@ -1661,12 +1665,13 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
     workflow_failure = NULL;
     success = 1;
 done:
+    test_graphics = 0;
     test_escape_delay = 100000U;
     FreeMem(source, DEMO_SOURCE_CAPACITY + 1U);
     return success;
 }
 
-static int write_cube_report(const char *path, int success)
+static int write_cube_report(const char *path, int success, int pixel)
 {
     BPTR output = Open((STRPTR)path, MODE_NEWFILE);
     int written;
@@ -1674,11 +1679,13 @@ static int write_cube_report(const char *path, int success)
     written = write_text(output, "miga80_cube_report=1\n") &&
         write_text(output, "frames=") && write_decimal(output, last_animation_frames) &&
         write_text(output, "\nelapsed_q16=") && write_decimal(output, last_animation_elapsed) &&
-        (success ? write_text(output,
-            "\nlua_native=pass\ndouble_buffer=pass\nblitter_edges=pass\n"
+        (success ? (write_text(output, "\nlua_native=pass\ndouble_buffer=pass\n") &&
+            write_text(output, pixel
+                ? "cpu_drawing=pass\npixel_pf1=pass\nplanar_empty=pass\nc2p_readback=pass\n"
+                : "blitter_edges=pass\n") && write_text(output,
             "clock_ten_seconds=pass\nescape_animation=pass\nreplay=pass\nmemory_no_growth=pass\n"
             "source_return=pass\nctrl_q_exit=pass\n"
-            "hosted_cleanup=pass\nresult=pass\n") :
+            "hosted_cleanup=pass\nresult=pass\n")) :
             (write_text(output, "\nfailure=") &&
              write_text(output, last_failure != NULL ? last_failure :
                  workflow_failure != NULL ? workflow_failure : "cube_setup") &&
@@ -1729,7 +1736,8 @@ int main(int argc, char **argv)
         argc > 1 && argv[1][0] != '\0' ? argv[1] : DEMO_DEFAULT_SOURCE;
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
-    const int cubetest = argc > 3 && strcmp(argv[3], "CUBETEST") == 0;
+    const int cubepixeltest = argc > 3 && strcmp(argv[3], "CUBEPIXELTEST") == 0;
+    const int cubetest = cubepixeltest || (argc > 3 && strcmp(argv[3], "CUBETEST") == 0);
     const int cube = argc > 3 && strcmp(argv[3], "CUBE") == 0;
     const int selftest = argc > 3 && strcmp(argv[3], "SELFTEST") == 0;
     const int graphicstest = argc > 3 && strcmp(argv[3], "GRAPHICSTEST") == 0;
@@ -1866,7 +1874,7 @@ int main(int argc, char **argv)
 
     success = 1;
     if (cubetest) {
-        success = run_cube_regression(screen, chunky, &metrics);
+        success = run_cube_regression(screen, chunky, &metrics, cubepixeltest);
     } else if (cube) {
         char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
         const int completed = compile_and_run(screen, chunky, &metrics, report_path,
@@ -1931,6 +1939,6 @@ cleanup:
     if (graphicstest && !write_graphics_report(report_path, success)) {
         success = 0;
     }
-    if (cubetest && !write_cube_report(report_path, success)) { success = 0; }
+    if (cubetest && !write_cube_report(report_path, success, cubepixeltest)) { success = 0; }
     return success ? RETURN_OK : RETURN_FAIL;
 }

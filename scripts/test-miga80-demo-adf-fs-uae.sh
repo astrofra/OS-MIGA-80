@@ -104,9 +104,9 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
-  CUBETEST)
+  CUBETEST|CUBEPIXELTEST)
     printf '%s\n' \
-      'MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT CUBETEST' \
+      "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
       >"$MIGA80_TEST_STARTUP"
     ;;
   AUTORUN|SELFTEST|STOPTEST|GRAPHICSTEST)
@@ -167,7 +167,7 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
            /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
-    elif [ "$MIGA80_MODE" = CUBETEST ]; then
+    elif [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
       if /usr/bin/grep -q '^miga80_cube_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
@@ -212,8 +212,12 @@ if ! xdftool "$MIGA80_RUN_ADF" read BOOTED.TXT "$MIGA80_REPORT" \
   exit 1
 fi
 
-if [ "$MIGA80_MODE" = CUBETEST ]; then
-  /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-fs-uae.txt"
+if [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
+  if [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
+    /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-chunky-fs-uae.txt"
+  else
+    /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-fs-uae.txt"
+  fi
   python3 - "$MIGA80_REPORT" <<'PY_CHECK'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])

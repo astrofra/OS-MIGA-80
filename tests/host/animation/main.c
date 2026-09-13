@@ -11,6 +11,7 @@
 static struct miga80_draw_surface surface;
 static uint8_t pixels[65536], planes[32768];
 static unsigned int frames, lines, clears;
+static unsigned int expected_layer = MIGA80_LAYER_PLANAR;
 static FILE *edges;
 static uint32_t trace = 0x811c9dc5U;
 static void record(uint32_t v) { trace = ((trace << 5) | (trace >> 27)) ^ v; }
@@ -18,7 +19,7 @@ static int layer(void *p, uint32_t l) { record(36); record(l); miga80_draw_selec
 static int pset(void *p,uint32_t x,uint32_t y,uint32_t c) { miga80_draw_pset(p,x,y,c); return 1; }
 static int line(void *p,uint32_t x,uint32_t y,uint32_t xx,uint32_t yy,uint32_t c)
 {
-    assert(surface.layer == MIGA80_LAYER_PLANAR);
+    assert(surface.layer == expected_layer);
     assert(x < 256 && y < 256 && xx < 256 && yy < 256);
     assert(c == 2 || c == 4 || c == 6 || c == 8);
     fprintf(edges,"%u %u %u %u %u %u %u\n",frames,lines%12,x,y,xx,yy,c);
@@ -27,7 +28,22 @@ static int line(void *p,uint32_t x,uint32_t y,uint32_t xx,uint32_t yy,uint32_t c
     return 1;
 }
 static int clear(void *p,uint32_t c) { assert(c==0); record(64); record(c); miga80_draw_clear(p,c); ++clears; return 1; }
-static int flip(void *p) { (void)p; record(68); ++frames; assert(lines==frames*12); return 1; }
+static int flip(void *p)
+{
+    unsigned int i, lit = 0;
+    (void)p;
+    record(68); ++frames; assert(lines==frames*12);
+    if (expected_layer == MIGA80_LAYER_PIXEL) {
+        assert(surface.pixel_written);
+        for (i=0;i<sizeof(planes);++i) { assert(planes[i]==0); }
+        for (i=0;i<sizeof(pixels);++i) {
+            assert(pixels[i]==0 || pixels[i]==2 || pixels[i]==4 || pixels[i]==6 || pixels[i]==8);
+            if (pixels[i]!=0) { ++lit; }
+        }
+        assert(lit>0);
+    }
+    return 1;
+}
 static uint32_t time_now(void *p) { (void)p; return frames*65536U/25U; }
 
 static void trig_tests(void)
@@ -63,7 +79,11 @@ int main(int argc,char **argv)
     uint32_t result;
     unsigned int mode,i;
     FILE *f;
-    assert(argc==3);
+    assert(argc==3 || argc==4);
+    if (argc==4) {
+        assert(strcmp(argv[3],"PIXEL")==0 || strcmp(argv[3],"PLANAR")==0);
+        expected_layer=strcmp(argv[3],"PIXEL")==0 ? MIGA80_LAYER_PIXEL : MIGA80_LAYER_PLANAR;
+    }
     trig_tests();
     f=fopen(argv[1],"rb");assert(f);n=fread(source,1,4096,f);assert(!ferror(f));fclose(f);source[n]=0;
     surface.layer=MIGA80_LAYER_PIXEL;surface.pixels=pixels;

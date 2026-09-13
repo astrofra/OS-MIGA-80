@@ -65,3 +65,11 @@ with cls(0); flip does not clear it or copy the previous image. time() returns
 fix seconds since the first displayed frame, or zero before the first flip.
 The two animation bitmaps require another 128 KiB of Chip RAM. The editor's
 original bitmap is preserved. Esc also works while waiting for a buffer swap.
+
+CHUNKY CUBE COMPARISON
+
+miga80-cube-chunky.adf boots the same cube using layer(PIXEL). On that disk,
+DATA/CUBE.LUA and DATA/DEFAULT.LUA contain the chunky variant. CPU Bresenham
+replaces blitter lines; flip converts the whole chunky frame to PF1. The
+current converter is the scalar C reference and is substantially slower.
+F5 replays, Esc stops and Ctrl-Q exits as usual.

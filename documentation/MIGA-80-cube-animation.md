@@ -140,3 +140,49 @@ et doivent s’exécuter successivement.
 
 La mesure FS-UAE valide le fonctionnement émulé. Le retour des tests physiques
 sur A1200 reste attendu ; aucune cadence sur machine réelle n’est encore validée.
+
+## Variante chunky / PF1
+
+[`assets/demo/cube-chunky.lua`](../assets/demo/cube-chunky.lua) est la même
+animation sur deux axes, avec une seule différence : `layer(PIXEL)` remplace
+`layer(PLANAR)`. `cls()` efface le tampon chunky sur le CPU, `line()` utilise
+Bresenham CPU et chaque `flip()` convertit les 65 536 pixels vers PF1 dans le
+bitmap caché. La conversion est actuellement la référence scalaire C
+`miga80_c2p4_reference_byte4`.
+
+```sh
+gmake animation-chunky-test
+gmake miga80-cube-chunky-fs-uae
+```
+
+`build/distribution/miga80-cube-chunky.adf` démarre cette variante automatiquement.
+Sur ce disque, `DATA/CUBE.LUA` et `DATA/DEFAULT.LUA` contiennent le source chunky.
+F5 relance, ESC interrompt et Ctrl-Q quitte. Le source PLANAR reste dans
+`assets/demo/cube.lua`, et son ADF conserve son nom habituel.
+
+Le test hôte impose que les deux sources diffèrent uniquement par la couche.
+Il vérifie 250 images, 3 000 arêtes, les pixels chunky non vides et les plans
+PLANAR vides. La trace native chunky attendue est `559233d3` ; les sorties O1
+et guarded font toujours 1 540 / 1 600 octets, avec une borne de pile de
+1 164 octets. Le profil ADF `CUBEPIXELTEST` contrôle PF1 par lecture des pixels
+AGA après C2P, PF2 vide, zéro ligne blitter, les échanges de buffers, les arrêts
+ESC et les relances. La lecture de contrôle intervient après capture de la durée. L’injection ESC
+est programmée après six secondes pour atteindre plusieurs images avec cette
+conversion lente ; le profil PLANAR garde son délai de 0,5 seconde.
+
+Rapports : `build/reports/animation-chunky-host.txt` et
+`build/reports/cube-chunky-fs-uae.txt`. Les mesures restent celles de FS-UAE,
+sans validation physique A1200.
+
+Dernier essai A1200 PAL / 2 Mio Chip / sans Fast dans FS-UAE :
+
+| Variante | Images affichées | Durée depuis la première image |
+|---|---:|---:|
+| PLANAR, blitter direct | 168 | 10,04 s |
+| PIXEL, Bresenham CPU + C2P C | 5 | 10,42 s |
+
+La variante chunky fonctionne mais la rotation est très saccadée. Ces nombres
+mesurent la chaîne de rendu complète, pas le coût isolé de Bresenham ou de la
+C2P. Le test passe trois interruptions ESC puis deux animations complètes, avec
+lecture de contrôle des pixels et sans croissance mémoire. Capture :
+`build/reports/cube-chunky-fs-uae.png`.
