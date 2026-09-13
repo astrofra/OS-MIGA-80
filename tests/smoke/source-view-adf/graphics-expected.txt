@@ -1,0 +1,16 @@
+miga80_graphics_report=1
+pixel_checksum=003971a5
+planar_checksum=4235248a
+planar_lines=19
+rounds=3
+pixel_pf1=pass
+planar_pf2=pass
+copper_palette_banks=pass
+copper_palette_rgb=pass
+direct_blitter=pass
+clipping_octants_erase=pass
+source_return=pass
+ctrl_q_exit=pass
+resources_released=pass
+hosted_cleanup=pass
+result=pass

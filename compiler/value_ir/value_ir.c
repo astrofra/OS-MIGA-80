@@ -372,7 +372,7 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
            opcode == MIGA80_VALUE_FIX_FROM_I32 ||
            opcode == MIGA80_VALUE_I32_FROM_FIX ||
            opcode == MIGA80_VALUE_NORMALIZE_INTEGER ||
-           comparison_opcode(opcode) || opcode == MIGA80_VALUE_CALL_PSET ||
+           comparison_opcode(opcode) || miga80_value_call_arguments(opcode) >= 1U ||
            opcode == MIGA80_VALUE_PHI;
 }
 
@@ -383,13 +383,13 @@ static int opcode_has_right(enum miga80_value_opcode opcode)
            opcode == MIGA80_VALUE_MUL_FIX || opcode == MIGA80_VALUE_DIV ||
            opcode == MIGA80_VALUE_DIV_FIX ||
            opcode == MIGA80_VALUE_DIV_U ||
-           comparison_opcode(opcode) || opcode == MIGA80_VALUE_CALL_PSET ||
+           comparison_opcode(opcode) || miga80_value_call_arguments(opcode) >= 2U ||
            opcode == MIGA80_VALUE_PHI;
 }
 
 static int opcode_has_third(enum miga80_value_opcode opcode)
 {
-    return opcode == MIGA80_VALUE_CALL_PSET;
+    return miga80_value_call_arguments(opcode) >= 3U;
 }
 
 static int mark_root(struct miga80_value_function *function,
@@ -435,7 +435,7 @@ static int mark_live_values(struct miga80_value_function *function,
         const struct miga80_value_instruction *value =
             &function->values[value_index];
 
-        if (value->opcode == MIGA80_VALUE_CALL_PSET &&
+        if (miga80_value_call_arguments(value->opcode) != 0U &&
             !mark_root(function, value_index, worklist, &worklist_size,
                        diagnostic)) {
             return 0;
@@ -1009,6 +1009,39 @@ static int lower_block_values(const struct miga80_ir_function *source,
             value = make_binary(result, value_opcode(instruction->opcode),
                                 left, right, instruction->line,
                                 instruction->column, diagnostic);
+            break;
+        }
+        case MIGA80_IR_CALL_LAYER:
+            value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_LAYER,
+                              stack[--stack_size], MIGA80_INVALID_VALUE,
+                              0U, 0U, instruction->line, instruction->column,
+                              diagnostic);
+            if (value != MIGA80_INVALID_VALUE) {
+                continue;
+            }
+            break;
+        case MIGA80_IR_CALL_LINE: {
+            const unsigned int color = stack[--stack_size];
+            const unsigned int y1 = stack[--stack_size];
+            const unsigned int x1 = stack[--stack_size];
+            const unsigned int y0 = stack[--stack_size];
+            const unsigned int x0 = stack[--stack_size];
+
+            /* All five expressions have already been evaluated in source
+             * order. Two ordered effect calls retain the three-register ABI. */
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_LINE_START, x0, y0, 0U, 0U,
+                              instruction->line, instruction->column, diagnostic);
+            if (value == MIGA80_INVALID_VALUE) {
+                break;
+            }
+            result->values[value].third = color;
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_LINE_END, x1, y1, 0U, 0U,
+                              instruction->line, instruction->column, diagnostic);
+            if (value != MIGA80_INVALID_VALUE) {
+                continue;
+            }
             break;
         }
         case MIGA80_IR_CALL_PSET: {

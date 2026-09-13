@@ -1,9 +1,9 @@
 # MIGA-80 workflow robustness
 
-Date: 2026-09-12. Physical A1200 feedback is still pending.
+Date: 2026-09-13. Physical A1200 feedback is still pending.
 
 Validated locally: `gmake check`, the guarded Musashi suite, supervised ADF
-`AUTORUN`, all 13 `SELFTEST` attempts, ten `STOPTEST` stops, and the direct
+`AUTORUN`, all 13 `SELFTEST` attempts, 13 `STOPTEST` stops, and the direct
 `NOSUPERVISOR` comparison pass. The ADF regressions used FS-UAE with
 Kickstart 3.0 (39.106), 2 MiB Chip RAM, and no Fast RAM. The final workflow
 report confirms source recovery, stable warmed free memory, and hosted cleanup.
@@ -28,8 +28,9 @@ The original unguarded O0/O1 suites remain semantic and optimization baselines.
 Compilation uses the existing guarded 32 KiB Exec `StackSwap` stack. Generated
 execution uses a separate 4 KiB stack with 256-byte guards on both sides.
 Before entry, the encoder's conservative stack bound must fit that stack
-(96 bytes for the default program). The bound covers the accepted numeric and
-trusted `pset` subset; future user calls require extending it.
+(96 bytes for the default program). Layer/line programs add 1,024 bytes for the trusted C drawing path
+(see [drawing primitives](MIGA-80-drawing-primitives.md)). The bound covers
+the accepted numeric and trusted drawing subset; future user calls require extending it.
 
 The trampoline in `src/demo/runtime_guarded.S` saves the full Amiga C preserved
 register set, including D2, on its caller's stack (the supervised worker stack
@@ -70,8 +71,9 @@ exhaustion is required. Compilation itself is not cancellable.
 
 The worker has a guarded 4 KiB C stack above the guarded 4 KiB generated stack
 in one allocation. Exec's stack bounds cover both stacks throughout the
-trampoline's stack switch. The worker performs numeric code and the bounded
-memory-only `pset` service. It must never own allocations, DOS activity, locks,
+trampoline's stack switch. The worker performs numeric code, bounded memory-only
+PIXEL drawing, and PLANAR command submission. The owner executes the direct
+blitter batches. The worker must never own allocations, DOS activity, locks,
 pending I/O, DMA, or other resources requiring cleanup. Display publication,
 memory allocation, and device I/O stay in the owner. This narrow contract
 is what allows forced task
@@ -149,7 +151,8 @@ uses a disposable ADF copy, while normal interactive diagnostics remain in RAM.
 
 `STOPTEST` runs one guarded-loop warmup, then three rounds of a guarded infinite
 loop, the same source recompiled without budget instrumentation, and a `pset`
-service replaced by a native self-branch: ten stopped runs. A timer serviced
+service replaced by a native self-branch, plus an unguarded PLANAR-line loop:
+13 stopped runs. The latter must execute real blitter commands before ESC. A timer serviced
 by the owner sends F5 and then Esc through `input.device` and Intuition, including
 held-key repeats and release. A separate watchdog turns missing Esc delivery
 into a failure. Only real Esc delivery counts as a successful stop; the test

@@ -9,7 +9,7 @@
 #define MIGA80_MAX_CFG_JOINS ((MIGA80_MAX_BASIC_BLOCKS - 1U) / 3U)
 #define MIGA80_MAX_VALUE_INSTRUCTIONS \
     (MIGA80_MAX_PARAMETERS + MIGA80_MAX_AST_NODES + \
-     MIGA80_MAX_STATEMENTS + MIGA80_MAX_CFG_JOINS * MIGA80_MAX_LOCALS)
+     2U * MIGA80_MAX_STATEMENTS + MIGA80_MAX_CFG_JOINS * MIGA80_MAX_LOCALS)
 #define MIGA80_INVALID_VALUE UINT_MAX
 
 enum miga80_value_opcode {
@@ -37,8 +37,36 @@ enum miga80_value_opcode {
     MIGA80_VALUE_GE_U32,
     MIGA80_VALUE_NORMALIZE_INTEGER,
     MIGA80_VALUE_CALL_PSET,
+    MIGA80_VALUE_CALL_LAYER,
+    MIGA80_VALUE_CALL_LINE_START,
+    MIGA80_VALUE_CALL_LINE_END,
     MIGA80_VALUE_PHI
 };
+
+static inline unsigned int miga80_value_call_arguments(
+    enum miga80_value_opcode opcode)
+{
+    switch (opcode) {
+    case MIGA80_VALUE_CALL_LAYER: return 1U;
+    case MIGA80_VALUE_CALL_LINE_END: return 2U;
+    case MIGA80_VALUE_CALL_LINE_START:
+    case MIGA80_VALUE_CALL_PSET: return 3U;
+    default: return 0U;
+    }
+}
+
+static inline unsigned int miga80_value_call_offset(
+    enum miga80_value_opcode opcode)
+{
+    switch (opcode) {
+    case MIGA80_VALUE_CALL_LAYER: return MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_LINE_START:
+        return MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_LINE_END:
+        return MIGA80_ABI_RUNTIME_LINE_END_HANDLER_OFFSET;
+    default: return MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET;
+    }
+}
 
 struct miga80_value_instruction {
     enum miga80_type type;

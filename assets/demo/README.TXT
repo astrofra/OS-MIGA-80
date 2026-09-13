@@ -30,3 +30,21 @@ The loop budget remains active. SUPERVISOR explicitly enables supervision.
 
 The source is stored in DATA/DEFAULT.LUA. FONT4X8.BIN is the deterministic
 runtime export of the freely licensed project font in works/ID.
+
+DRAWING ON BOTH LAYERS
+
+PIXEL is selected at the start of each run. layer(PIXEL) selects the chunky
+buffer, displayed in PF1/front after C2P. layer(PLANAR) selects four native
+bitplanes, displayed in PF2/back. Both accept pset(x,y,color) and
+line(x0,y0,x1,y1,color), with coordinates in 0..255 and colors in 0..15.
+Lines are clipped; out-of-range pixels and colors above 15 are ignored.
+Zero on PIXEL reveals PLANAR. Zero on PLANAR is the base/backdrop color.
+
+PIXEL lines use CPU Bresenham. PLANAR lines program the blitter registers
+directly. The owner takes the blitter once per batch of at most 16 commands,
+suspends task switching during that batch, waits for DMA completion, and
+returns the resource. Interrupts stay active so Esc can be delivered. PLANAR
+pset uses CPU bit writes in the same command order. The worker owns no DMA.
+
+After Ctrl-Q, load the two-layer example from the Shell and press F5:
+MIGA80:MIGA80 MIGA80:DATA/LAYERS.LUA RAM:MIGA80-BOOTED.TXT

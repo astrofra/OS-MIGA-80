@@ -2,7 +2,8 @@
 
 **Status:** Call-aware O1 F5 path, hosted workflow protections, and preemptive
 Escape interruption implemented; physical A1200 feedback remains pending.
-See the [2026-09-12 robustness checkpoint](MIGA-80-workflow-robustness.md).
+The subsequent [drawing extension](MIGA-80-drawing-primitives.md) adds explicit
+PLANAR/PIXEL selection and direct hardware lines. See the [robustness checkpoint](MIGA-80-workflow-robustness.md).
 
 **Date:** 2026-09-05
 
@@ -149,10 +150,10 @@ user.
 
 The source UI is composited in playfield 1 (the odd AGA bitplanes). Its
 four-bit colour number therefore addresses palette entries 0 through 15
-directly; colour zero reveals the playfield-2/backdrop colour. This explicit
-placement avoids depending on the configurable playfield-2 colour-bank offset
-for the editor and leaves the same foreground playfield ready for generated
-`pset` output.
+directly; colour zero reveals the playfield-2/backdrop colour. The same
+foreground playfield receives generated `PIXEL` output. A user Copper list
+sets the PF2 offset to 16 and clears palette XOR for both layers; its installed
+values and RGB data are checked by the [drawing regression](MIGA-80-drawing-primitives.md).
 
 An optional semicolon is accepted as a Lua-compatible statement separator.
 This small grammar addition allows two short declarations or assignments on
@@ -471,7 +472,8 @@ The 2026-09-05 Kickstart 3.0 FS-UAE run passes with:
 - a 643-byte source file occupying exactly 30 rows with a 44-column maximum;
 - source FNV-1a checksum `6600f4de`;
 - canonical source-view framebuffer checksum `f05779cc` (historical Esc-exit
-  footer; the current Ctrl-Q footer produces `d6686400`);
+  footer; Ctrl-Q initially produced `d6686400`, and the current generic Lua
+  source title produces `422c03c3`);
 - verified AGA dual-playfield palette bases, RGB round-trip, C2P output, and
   bitmap pixel readback;
 - 39 occupied OFS blocks, reported as 19 KiB including filesystem overhead.

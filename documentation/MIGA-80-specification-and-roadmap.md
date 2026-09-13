@@ -1,5 +1,13 @@
 # MIGA-80 Product Requirements, Technical Specification, and Development Roadmap
 
+**2026-09-13 implementation checkpoint:** the hosted Lua workflow now exposes
+`layer(PLANAR/PIXEL)`, `pset`, and `line` on both AGA playfields. PLANAR lines use
+direct blitter registers in bounded owner batches; PIXEL lines use CPU
+Bresenham. ESC supervision and Ctrl-Q exit remain the development workflow.
+See [drawing primitives](MIGA-80-drawing-primitives.md). This advances the
+native vertical slice; physical benchmark feedback and full exclusive-runtime
+validation remain open.
+
 | Field | Value |
 | --- | --- |
 | Document status | Working specification, revision 0.3 |

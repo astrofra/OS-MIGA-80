@@ -116,6 +116,24 @@ edge checks for zero before decrementing, changes only CCR on the permitted
 path, and reports fault 3 through the core handler on exhaustion. Unguarded
 O0/O1 oracle images retain their original context requirements.
 
+The optional drawing profile extends the guarded prefix to 52 bytes:
+
+| Offset | Drawing profile field |
+|---:|---|
+| `36` | `layer` handler: D0 = PLANAR (0) or PIXEL (1) |
+| `40` | `line_start` handler: D0/D1/D2 = x0/y0/color |
+| `44` | `line_end` handler: D0/D1 = x1/y1 |
+| `48` | Private drawing-surface pointer used by trusted shims |
+
+`layer(PLANAR)` and `layer(PIXEL)` are symbolic source intrinsics. A source
+`line(x0,y0,x1,y1,color)` evaluates all arguments before the two ordered calls;
+the split preserves the three-scalar-register ABI. Both services have the same
+clobber contract as `pset`. Neither returns a value. The extended pset shim
+uses the surface's current layer; PIXEL remains the initial selection. Legacy
+pset-only runtime fixtures keep their original context and assembly service.
+Programs with live layer/line calls reserve an additional 1,024 stack bytes
+for trusted C drawing helpers. See [drawing primitives](MIGA-80-drawing-primitives.md).
+
 ## Stack and frame contract
 
 - The stack grows toward lower addresses and has no red zone.

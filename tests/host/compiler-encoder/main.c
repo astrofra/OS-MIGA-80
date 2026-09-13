@@ -181,7 +181,7 @@ int main(int argc, char **argv)
     struct miga80_ir_function *ir;
     struct miga80_value_function *value_ir;
     struct miga80_diagnostic diagnostic;
-    struct miga80_ir_runtime runtime;
+    struct miga80_ir_runtime runtime = {0};
     uint32_t result = UINT32_MAX;
     size_t source_size;
     size_t code_o0_size;

@@ -10,6 +10,8 @@
 #include <exec/execbase.h>
 #include <exec/tasks.h>
 #include <graphics/displayinfo.h>
+#include <graphics/copper.h>
+#include <graphics/gfxmacros.h>
 #include <graphics/gfx.h>
 #include <graphics/gfxbase.h>
 #include <graphics/modeid.h>
@@ -34,6 +36,8 @@
 #include "compiler/value_ir/value_ir.h"
 #include "demo/supervisor.h"
 #include "demo/stop_test.h"
+#include "demo/drawing_host.h"
+#include "drawing_test_data.h"
 #include "ui/palette.h"
 #include "ui/source_view.h"
 
@@ -84,7 +88,10 @@ struct demo_compile_request {
 
 static struct demo_compile_request compiler_request;
 static int compiler_run_result;
-static struct miga80_runtime_context last_runtime;
+static struct miga80_drawing_context last_drawing_context;
+#define last_runtime last_drawing_context.runtime
+static uint32_t last_planar_checksum;
+static ULONG last_planar_lines;
 static uint32_t last_framebuffer_checksum;
 static uint32_t execution_budget = DEMO_EXECUTION_BUDGET;
 static int force_runtime_fault;
@@ -93,6 +100,8 @@ static struct Window *active_window;
 static int supervisor_enabled = 1;
 static int escape_held;
 static struct miga80_supervisor_observation last_supervisor;
+static int test_graphics;
+static int last_graphics_readback;
 static int test_escape;
 static int test_unguarded;
 static int test_stalled_service;
@@ -106,8 +115,18 @@ typedef char runtime_context_layout_check[
     offsetof(struct miga80_runtime_context, fault_column) ==
             MIGA80_ABI_RUNTIME_FAULT_COLUMN_OFFSET ? 1 : -1];
 
+typedef char drawing_context_layout_check[
+    sizeof(struct miga80_drawing_context) == MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE &&
+    offsetof(struct miga80_drawing_context, drawing_state) ==
+        MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET &&
+    offsetof(struct miga80_draw_surface, layer) == 0U ? 1 : -1];
+
 extern ULONG miga80_execute_generated(APTR code, APTR runtime_context);
 extern void miga80_runtime_pset(void);
+extern void miga80_runtime_draw_pset(void);
+extern void miga80_runtime_layer(void);
+extern void miga80_runtime_line_start(void);
+extern void miga80_runtime_line_end(void);
 extern void miga80_runtime_fault(void);
 extern void miga80_runtime_test_fault(void);
 extern void miga80_runtime_test_stall(void);
@@ -463,6 +482,98 @@ static void prepare_palette(void)
     amiga_palette[1U + (DEMO_PALETTE_COLORS * 3U)] = 0U;
 }
 
+static int install_display_palette(struct Screen *screen)
+{
+    struct UCopList *list = AllocMem(sizeof(*list), MEMF_PUBLIC | MEMF_CLEAR);
+    volatile struct Custom *registers = (volatile struct Custom *)0xdff000UL;
+    if (list == NULL) {
+        return 0;
+    }
+    if (UCopperListInit(list, 4U) == NULL) {
+        if (list->FirstCopList != NULL) {
+            FreeCopList(list->FirstCopList);
+        }
+        FreeMem(list, sizeof(*list));
+        return 0;
+    }
+    /* Kickstart 3.0 can report the requested ColorMap bases while emitting
+     * PF2OF=7 and BPLAM=16. Override them at viewport line zero, after the
+     * system's palette loads: PF1 uses 0..15, PF2 uses 16..31. Keep the
+     * hosted 140 ns sprite resolution and sprite palette bases intact. */
+    CWAIT(list, 0, 0);
+    CMOVE(list, registers->bplcon3, 0x1040U);
+    CMOVE(list, registers->bplcon4, 0x0011U);
+    CEND(list);
+    Forbid();
+    screen->ViewPort.UCopIns = list;
+    Permit();
+    /* CloseScreen releases this user list together with the display lists. */
+    return RethinkDisplay() == 0U;
+}
+
+/* Inspect the actual merged non-interlaced display, not just ColorMap tags.
+ * This test is specific to our exclusive screen without raster effects. */
+static int verify_display_palette(void)
+{
+    UWORD high[DEMO_PALETTE_COLORS];
+    UWORD low[DEMO_PALETTE_COLORS];
+    UWORD bplcon0 = 0U, bplcon2 = 0xffffU;
+    UWORD bplcon3 = 0xffffU, bplcon4 = 0xffffU;
+    const struct cprlist *list;
+    ULONG index;
+    int ended = 0;
+
+    for (index = 0U; index < DEMO_PALETTE_COLORS; ++index) {
+        high[index] = low[index] = 0xffffU;
+    }
+    /* Keep the list and its allocation bound together while Intuition is
+     * prevented from rebuilding/freeing it. No I/O or waiting in this span. */
+    Forbid();
+    list = GfxBase->ActiView != NULL ? GfxBase->ActiView->LOFCprList : NULL;
+    if (list != NULL && list->start != NULL &&
+        list->start == GfxBase->LOFlist &&
+        list->MaxCount > 0 && list->MaxCount <= 4096) {
+        for (index = 0U; index < (ULONG)list->MaxCount; ++index) {
+            const UWORD reg = list->start[index * 2U];
+            const UWORD value = list->start[index * 2U + 1U];
+            if (reg == 0xffffU && value == 0xfffeU) {
+                ended = 1;
+                break;
+            }
+            if ((reg & 1U) != 0U) {
+                continue;
+            }
+            if (reg == 0x100U) { bplcon0 = value; }
+            else if (reg == 0x104U) { bplcon2 = value; }
+            else if (reg == 0x106U) { bplcon3 = value; }
+            else if (reg == 0x10cU) { bplcon4 = value; }
+            else if (reg >= 0x180U && reg <= 0x1beU &&
+                     (bplcon3 & 0xe000U) == 0U) {
+                const ULONG color = (reg - 0x180U) / 2U;
+                if ((bplcon3 & 0x0200U) != 0U) {
+                    low[color] = value & 0x0fffU;
+                } else {
+                    high[color] = value & 0x0fffU;
+                }
+            }
+        }
+    }
+    Permit();
+    /* Eight planes, dual playfield, PF1 priority, PF2 offset 16, no XOR. */
+    if (!ended || (bplcon0 & 0xfe14U) != 0x0610U ||
+        (bplcon2 & 0x0040U) != 0U || (bplcon3 & 0x1c00U) != 0x1000U ||
+        (bplcon4 & 0xff00U) != 0U) {
+        return 0;
+    }
+    for (index = 0U; index < DEMO_PALETTE_COLORS; ++index) {
+        const UWORD expected = miga80_workbench_sunset_rgb12[index & 15U];
+        if (high[index] != expected || low[index] != expected) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int verify_palette_bases(struct ColorMap *color_map)
 {
     struct TagItem query[] = {
@@ -592,6 +703,47 @@ static void format_compile_error(char *status, size_t capacity,
                    diagnostic->message);
 }
 
+static int verify_drawing(struct Screen *screen, struct miga80_host_drawing *drawing)
+{
+    const struct miga80_draw_surface *surface = miga80_host_drawing_surface(drawing);
+    unsigned int x, y;
+    if (screen == NULL) {
+        return 0;
+    }
+    for (y = 0U; y < MIGA80_DRAW_HEIGHT; ++y) {
+        for (x = 0U; x < MIGA80_DRAW_WIDTH; ++x) {
+            const unsigned int pixel = surface->pixels[y * MIGA80_DRAW_WIDTH + x];
+            const unsigned int planar = miga80_draw_planar_pixel(surface, x, y);
+            unsigned int bit;
+            ULONG expected = 0U;
+            for (bit = 0U; bit < 4U; ++bit) {
+                expected |= ((pixel >> bit) & 1U) << (bit * 2U);
+                expected |= ((planar >> bit) & 1U) << (bit * 2U + 1U);
+            }
+            if (ReadPixel(&screen->RastPort, (LONG)x, (LONG)y) != expected) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+struct demo_run_events {
+    struct miga80_supervisor_events drawing;
+    struct miga80_supervisor_events input_test;
+};
+
+static int service_run_events(void *data, ULONG signals)
+{
+    struct demo_run_events *events = data;
+    if ((signals & events->input_test.signals) != 0U &&
+        !events->input_test.service(events->input_test.data, signals)) {
+        return 0;
+    }
+    return (signals & events->drawing.signals) == 0U ||
+           events->drawing.service(events->drawing.data, signals);
+}
+
 static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
 {
     struct Screen *screen = compiler_request.screen;
@@ -606,6 +758,8 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     struct miga80_diagnostic diagnostic;
     uint8_t *code = NULL;
     UBYTE *runtime_stack = NULL;
+    struct miga80_host_drawing *drawing = NULL;
+    struct demo_run_events run_events = {0};
     const ULONG runtime_allocation_bytes = DEMO_RUNTIME_STACK_TOTAL_BYTES +
         (supervisor_enabled ? MIGA80_SUPERVISOR_STACK_TOTAL_BYTES : 0U);
     size_t code_size = 0U;
@@ -617,6 +771,9 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     last_failure = NULL;
     ++compile_attempts;
     last_framebuffer_checksum = 0U;
+    last_planar_checksum = 0U;
+    last_planar_lines = 0U;
+    last_graphics_readback = 0;
     (void)memset(&last_runtime, 0, sizeof(last_runtime));
     error_status[0] = '\0';
     if (!show_source_status(screen, chunky, "COMPILING - PARSE")) {
@@ -703,12 +860,21 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
 
     CacheClearE((APTR)code, (ULONG)code_size, CACRF_ClearI);
     (void)memset(chunky, 0, DEMO_CHUNKY_BYTES);
+    drawing = miga80_host_drawing_create(chunky, &last_drawing_context,
+                                          &run_events.drawing);
+    if (drawing == NULL) {
+        failure = "drawing_memory";
+        goto cleanup;
+    }
+    last_drawing_context.layer_handler = (uint32_t)(uintptr_t)miga80_runtime_layer;
+    last_drawing_context.line_start_handler = (uint32_t)(uintptr_t)miga80_runtime_line_start;
+    last_drawing_context.line_end_handler = (uint32_t)(uintptr_t)miga80_runtime_line_end;
     last_runtime.fault_handler = (uint32_t)(uintptr_t)miga80_runtime_fault;
     last_runtime.pset_handler = (uint32_t)(uintptr_t)(test_stalled_service
                                     ? miga80_runtime_test_stall
                                     : force_runtime_fault
                                     ? miga80_runtime_test_fault
-                                    : miga80_runtime_pset);
+                                    : miga80_runtime_draw_pset);
     last_runtime.pixel_buffer = (uint32_t)(uintptr_t)chunky;
     last_runtime.budget = execution_budget;
     last_runtime.stack_top = (uint32_t)(uintptr_t)(
@@ -720,17 +886,20 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         int supervised;
 
         if (test_escape) {
-            injector = miga80_stop_injector_start(&events);
+            injector = miga80_stop_injector_start(&run_events.input_test);
             if (injector == NULL) {
                 failure = "stop_injector_setup";
                 goto cleanup;
             }
         }
+        events.signals = run_events.drawing.signals | run_events.input_test.signals;
+        events.service = service_run_events;
+        events.data = &run_events;
         supervised = miga80_supervise_generated(
             (APTR)code, &last_runtime, active_window->UserPort,
             runtime_stack + DEMO_STACK_GUARD_BYTES,
             runtime_stack + DEMO_RUNTIME_STACK_TOTAL_BYTES, &escape_held,
-            injector != NULL ? &events : NULL, &last_supervisor);
+            &events, &last_supervisor);
         if (injector != NULL &&
             !miga80_stop_injector_finish(injector,
                                           last_supervisor.interrupted)) {
@@ -767,15 +936,23 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
                            : "CONTROLLED RUNTIME FAULT");
         goto cleanup;
     }
+    miga80_host_drawing_flush(drawing);
     framebuffer_checksum = miga80_source_view_checksum(
         chunky, DEMO_CHUNKY_BYTES);
     last_framebuffer_checksum = framebuffer_checksum;
     if (miga80_source_view_draw_status(
             chunky, DEMO_SCREEN_WIDTH,
             "RUN COMPLETE - ESC SOURCE") != MIGA80_SOURCE_VIEW_OK ||
-        !publish_canonical(screen, chunky)) {
+        !miga80_host_drawing_publish(drawing, screen->RastPort.BitMap)) {
         failure = "display_run_result";
         goto cleanup;
+    }
+    if (test_graphics) {
+        last_graphics_readback = verify_drawing(screen, drawing);
+        if (!last_graphics_readback) {
+            failure = "drawing_readback";
+            goto cleanup;
+        }
     }
     if (report_path != NULL &&
         !write_run_report(report_path, metrics, ast, ir, value_ir, code,
@@ -786,6 +963,13 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     success = 1;
 
 cleanup:
+    if (drawing != NULL) {
+        const struct miga80_draw_surface *surface = miga80_host_drawing_surface(drawing);
+        last_planar_checksum = miga80_source_view_checksum(surface->planes[0],
+                                                          4U * MIGA80_DRAW_PLANE_BYTES);
+        last_planar_lines = miga80_host_drawing_lines(drawing);
+        miga80_host_drawing_destroy(drawing);
+    }
     last_failure = success ? NULL : failure;
     if (!success) {
         if (error_status[0] == '\0') {
@@ -1056,6 +1240,89 @@ static int workflow_case(struct Screen *screen, uint8_t *chunky,
 #define DEMO_WORKFLOW_ROUNDS 3U
 static const char *workflow_failure;
 
+static int run_graphics_regression(struct Screen *screen, uint8_t *chunky)
+{
+    unsigned int round;
+    ULONG baseline = 0U;
+    test_graphics = 1;
+    for (round = 0U; round < 3U; ++round) {
+        struct Miga80SourceViewMetrics metrics;
+        enum demo_state state = DEMO_STATE_SOURCE;
+        uint32_t source_checksum;
+        const ULONG signals = FindTask(NULL)->tc_SigAlloc;
+        workflow_failure = "graphics_source";
+        (void)strcpy(source_buffer, draw_test_source);
+        if (miga80_source_view_render(chunky, DEMO_SCREEN_WIDTH, source_buffer,
+                text_length(source_buffer), &metrics) != MIGA80_SOURCE_VIEW_OK ||
+            !publish_canonical(screen, chunky)) {
+            return 0;
+        }
+        source_checksum = miga80_source_view_checksum(chunky, DEMO_CHUNKY_BYTES);
+        workflow_failure = "graphics_source_palette";
+        if (!verify_display_palette()) {
+            return 0;
+        }
+        workflow_failure = "graphics_native";
+        if (workflow_key(screen, chunky, &metrics, NULL, &state,
+                           DEMO_RAWKEY_F5, 0U) != 0 || state != DEMO_STATE_RESULT ||
+            last_framebuffer_checksum != DRAW_TEST_PIXEL ||
+            last_planar_checksum != DRAW_TEST_PLANAR ||
+            last_planar_lines != DRAW_TEST_LINES || !last_graphics_readback ||
+            last_runtime.fault_code != 0U) {
+            return 0;
+        }
+        workflow_failure = "graphics_result_palette";
+        if (!verify_display_palette()) {
+            return 0;
+        }
+        workflow_failure = "graphics_source_return";
+        if (workflow_key(screen, chunky, &metrics, NULL, &state,
+                           DEMO_RAWKEY_ESCAPE, 0U) != 0 || state != DEMO_STATE_SOURCE ||
+            miga80_source_view_checksum(chunky, DEMO_CHUNKY_BYTES) != source_checksum ||
+            !verify_source_view(screen, chunky) || !verify_display_palette() ||
+            workflow_key(screen, chunky, &metrics, NULL, &state,
+                           0x10U, IEQUALIFIER_CONTROL) != 1) {
+            return 0;
+        }
+        workflow_failure = "graphics_resources";
+        if (FindTask(NULL)->tc_SigAlloc != signals ||
+            (round != 0U && AvailMem(MEMF_PUBLIC) < baseline)) {
+            return 0;
+        }
+        baseline = AvailMem(MEMF_PUBLIC);
+    }
+    test_graphics = 0;
+    workflow_failure = NULL;
+    return 1;
+}
+
+static int write_graphics_report(const char *path, int passed)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int success;
+    if (output == (BPTR)0) {
+        return 0;
+    }
+    success = write_text(output, "miga80_graphics_report=1\n") &&
+        write_text(output, "pixel_checksum=") && write_hex32(output, last_framebuffer_checksum) &&
+        write_text(output, "\nplanar_checksum=") && write_hex32(output, last_planar_checksum) &&
+        write_text(output, "\nplanar_lines=") && write_decimal(output, last_planar_lines) &&
+        (passed ? write_text(output,
+            "\nrounds=3\npixel_pf1=pass\nplanar_pf2=pass\n"
+            "copper_palette_banks=pass\ncopper_palette_rgb=pass\n"
+            "direct_blitter=pass\nclipping_octants_erase=pass\n"
+            "source_return=pass\nctrl_q_exit=pass\nresources_released=pass\n"
+            "hosted_cleanup=pass\nresult=pass\n")
+            : (write_text(output, "\nfailure=") &&
+               write_text(output, last_failure != NULL ? last_failure :
+                   workflow_failure != NULL ? workflow_failure : "graphics_setup") &&
+               write_text(output, "\nresult=fail\n")));
+    if (!Close(output)) {
+        success = 0;
+    }
+    return success;
+}
+
 static int run_workflow_regression(struct Screen *screen, uint8_t *chunky)
 {
     static const char invalid_source[] =
@@ -1231,6 +1498,9 @@ static int run_stop_regression(struct Screen *screen, uint8_t *chunky,
 {
     static const char infinite_source[] =
         "function main(): void\n  while true do\n    continue\n  end\nend\n";
+    static const char planar_source[] =
+        "function main(): void\n  layer(PLANAR)\n  while true do\n"
+        "    line(0, 0, 255, 255, 15)\n  end\nend\n";
     static const char call_source[] =
         "function main(): void\n  pset(0, 0, 1)\nend\n";
     char *default_source;
@@ -1270,6 +1540,11 @@ static int run_stop_regression(struct Screen *screen, uint8_t *chunky,
         if (!stop_case(screen, chunky, call_source, 0, 1, NULL)) {
             goto done;
         }
+        workflow_failure = "stoptest_planar_blitter";
+        if (!stop_case(screen, chunky, planar_source, 1, 0, NULL) ||
+            last_planar_lines == 0U) {
+            goto done;
+        }
         workflow_failure = "stoptest_memory_growth";
         if (AvailMem(MEMF_PUBLIC) < baseline) {
             goto done;
@@ -1298,9 +1573,9 @@ static int write_stop_report(const char *path, int passed)
     }
     success = write_text(output, "miga80_stop_report=1\n") &&
         (passed ? write_text(output,
-            "supervision=exec-task\nstopped_runs=10\n"
+            "supervision=exec-task\nstopped_runs=13\n"
             "input_device_escape=pass\nguarded_loop=pass\n"
-            "unguarded_loop=pass\nstalled_service=pass\n"
+            "unguarded_loop=pass\nstalled_service=pass\nplanar_blitter=pass\n"
             "held_escape=pass\nrun_key_not_replayed=pass\n"
             "source_return=pass\nstopped_report=pass\nsignals_released=pass\n"
             "memory_no_growth=pass\nmandelbrot_recovery=pass\n"
@@ -1359,6 +1634,7 @@ int main(int argc, char **argv)
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
     const int selftest = argc > 3 && strcmp(argv[3], "SELFTEST") == 0;
+    const int graphicstest = argc > 3 && strcmp(argv[3], "GRAPHICSTEST") == 0;
     const int stoptest = argc > 3 && strcmp(argv[3], "STOPTEST") == 0;
     struct DisplayInfo display_info = {0};
     DisplayInfoHandle display_handle;
@@ -1460,13 +1736,15 @@ int main(int argc, char **argv)
     /*
      * AGA dual playfield interleaves PF1 on bitplanes 1/3/5/7 and PF2 on
      * bitplanes 2/4/6/8.  Put the source view in PF1 explicitly: its direct
-     * 0..15 colour registers are stable, while zero remains transparent and
-     * reveals the PF2/backdrop colour.  The earlier low-nibble placement put
-     * the editor in PF2 and exposed an emulator-visible PF2 colour-bank
-     * mismatch even though ColorMap readback itself succeeded.
+     * 0..15 colour registers are selected by the palette Copper list, while
+     * zero remains transparent and reveals the PF2/backdrop colour.
      */
     place_in_playfield_one(chunky);
 
+    if (!install_display_palette(screen)) {
+        failure = "source_palette_copper";
+        goto cleanup;
+    }
     prepare_palette();
     LoadRGB32(&screen->ViewPort, amiga_palette);
     if (!verify_palette(&screen->ViewPort)) {
@@ -1489,7 +1767,9 @@ int main(int argc, char **argv)
     }
 
     success = 1;
-    if (stoptest) {
+    if (graphicstest) {
+        success = run_graphics_regression(screen, chunky);
+    } else if (stoptest) {
         success = run_stop_regression(screen, chunky, report_path);
     } else if (selftest) {
         success = run_workflow_regression(screen, chunky);
@@ -1539,6 +1819,9 @@ cleanup:
         success = 0;
     }
     if (stoptest && !write_stop_report(report_path, success)) {
+        success = 0;
+    }
+    if (graphicstest && !write_graphics_report(report_path, success)) {
         success = 0;
     }
     return success ? RETURN_OK : RETURN_FAIL;

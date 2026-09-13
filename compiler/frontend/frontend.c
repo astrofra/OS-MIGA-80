@@ -1928,12 +1928,15 @@ static int current_identifier_is(const struct parser *parser,
            token_is_word(&parser->current, name);
 }
 
-static unsigned int parse_pset_statement(struct parser *parser)
+static unsigned int parse_graphics_statement(struct parser *parser)
 {
     const struct token call = parser->current;
-    static const enum miga80_type argument_types[] = {
-        MIGA80_TYPE_I32, MIGA80_TYPE_I32, MIGA80_TYPE_U8
-    };
+    const int is_layer = current_identifier_is(parser, "layer");
+    const int is_line = current_identifier_is(parser, "line");
+    const unsigned int count = is_layer ? 1U : is_line ? 5U : 3U;
+    const enum miga80_ast_statement_kind kind = is_layer
+        ? MIGA80_AST_CALL_LAYER : is_line ? MIGA80_AST_CALL_LINE
+                                        : MIGA80_AST_CALL_PSET;
     unsigned int statement_index;
     unsigned int argument;
     int arguments[MIGA80_MAX_INTRINSIC_ARGUMENTS];
@@ -1942,33 +1945,46 @@ static unsigned int parse_pset_statement(struct parser *parser)
     if (!expect(parser, TOKEN_LEFT_PAREN)) {
         return MIGA80_INVALID_STATEMENT;
     }
-    for (argument = 0U; argument < MIGA80_MAX_INTRINSIC_ARGUMENTS;
-         ++argument) {
-        arguments[argument] = parse_expression(parser);
-        if (!require_type(parser, &arguments[argument],
-                          argument_types[argument], call.line, call.column,
-                          "pset argument")) {
-            return MIGA80_INVALID_STATEMENT;
-        }
-        if (argument + 1U < MIGA80_MAX_INTRINSIC_ARGUMENTS) {
-            if (!expect(parser, TOKEN_COMMA)) {
+    for (argument = 0U; argument < count; ++argument) {
+        if (is_layer) {
+            const int planar = current_identifier_is(parser, "PLANAR");
+            if (!planar && !current_identifier_is(parser, "PIXEL")) {
+                set_diagnostic(parser->diagnostic, parser->current.line,
+                               parser->current.column,
+                               "layer requires PLANAR or PIXEL");
+                parser->failed = 1;
                 return MIGA80_INVALID_STATEMENT;
             }
+            arguments[argument] = add_node(parser, MIGA80_AST_LITERAL_I32,
+                parser->current.line, parser->current.column,
+                MIGA80_INVALID_NODE, MIGA80_INVALID_NODE,
+                planar ? MIGA80_LAYER_PLANAR : MIGA80_LAYER_PIXEL,
+                0U, MIGA80_TYPE_U8);
+            parser_advance(parser);
+        } else {
+            arguments[argument] = parse_expression(parser);
+            if (!require_type(parser, &arguments[argument],
+                               argument + 1U == count ? MIGA80_TYPE_U8
+                                                       : MIGA80_TYPE_I32,
+                               call.line, call.column, "drawing argument")) {
+                return MIGA80_INVALID_STATEMENT;
+            }
+        }
+        if (arguments[argument] == MIGA80_INVALID_NODE ||
+            (argument + 1U < count && !expect(parser, TOKEN_COMMA))) {
+            return MIGA80_INVALID_STATEMENT;
         }
     }
     if (!expect(parser, TOKEN_RIGHT_PAREN)) {
         return MIGA80_INVALID_STATEMENT;
     }
-    statement_index = allocate_statement(
-        parser, MIGA80_AST_CALL_PSET, 0U, MIGA80_INVALID_NODE, call.line,
-        call.column);
+    statement_index = allocate_statement(parser, kind, 0U, MIGA80_INVALID_NODE,
+                                          call.line, call.column);
     if (statement_index == MIGA80_INVALID_STATEMENT) {
         return MIGA80_INVALID_STATEMENT;
     }
-    parser->function->statements[statement_index].argument_count =
-        MIGA80_MAX_INTRINSIC_ARGUMENTS;
-    for (argument = 0U; argument < MIGA80_MAX_INTRINSIC_ARGUMENTS;
-         ++argument) {
+    parser->function->statements[statement_index].argument_count = count;
+    for (argument = 0U; argument < count; ++argument) {
         parser->function->statements[statement_index].arguments[argument] =
             arguments[argument];
     }
@@ -2018,8 +2034,10 @@ static int parse_control_statement_list(struct parser *parser,
         } else if (parser->current.kind == TOKEN_BREAK ||
                    parser->current.kind == TOKEN_CONTINUE) {
             statement = parse_loop_control_statement(parser);
-        } else if (current_identifier_is(parser, "pset")) {
-            statement = parse_pset_statement(parser);
+        } else if (current_identifier_is(parser, "pset") ||
+                   current_identifier_is(parser, "layer") ||
+                   current_identifier_is(parser, "line")) {
+            statement = parse_graphics_statement(parser);
         } else {
             statement = parse_assignment(parser);
         }
@@ -2193,8 +2211,10 @@ int miga80_parse_function(const char *source, size_t source_size,
         } else if (parser.current.kind == TOKEN_BREAK ||
                    parser.current.kind == TOKEN_CONTINUE) {
             statement = parse_loop_control_statement(&parser);
-        } else if (current_identifier_is(&parser, "pset")) {
-            statement = parse_pset_statement(&parser);
+        } else if (current_identifier_is(&parser, "pset") ||
+                   current_identifier_is(&parser, "layer") ||
+                   current_identifier_is(&parser, "line")) {
+            statement = parse_graphics_statement(&parser);
         } else {
             statement = parse_assignment(&parser);
         }

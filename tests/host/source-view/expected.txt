@@ -3,6 +3,6 @@ source_bytes=643
 source_lines=30
 maximum_columns=44
 source_checksum=6600f4de
-framebuffer_checksum=d6686400
+framebuffer_checksum=422c03c3
 rejections=pass
 result=pass

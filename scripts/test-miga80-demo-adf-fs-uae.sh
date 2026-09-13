@@ -104,9 +104,14 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
-  AUTORUN|SELFTEST|STOPTEST)
+  AUTORUN|SELFTEST|STOPTEST|GRAPHICSTEST)
     printf '%s\n' \
       "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
+  GRAPHICSTEST_DIRECT)
+    printf '%s\n' \
+      'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT GRAPHICSTEST NOSUPERVISOR' \
       >"$MIGA80_TEST_STARTUP"
     ;;
   AUTORUN_DIRECT)
@@ -150,7 +155,14 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
   /bin/cp "$MIGA80_RUN_ADF" "$MIGA80_SNAPSHOT_ADF"
   if xdftool "$MIGA80_SNAPSHOT_ADF" type BOOTED.TXT \
        >"$MIGA80_CANDIDATE_REPORT" 2>/dev/null; then
-    if [ "$MIGA80_MODE" = STOPTEST ]; then
+    if [ "$MIGA80_MODE" = GRAPHICSTEST ] || [ "$MIGA80_MODE" = GRAPHICSTEST_DIRECT ]; then
+      if /usr/bin/grep -q '^miga80_graphics_report=1$' \
+           "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
+           /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
+    elif [ "$MIGA80_MODE" = STOPTEST ]; then
       if /usr/bin/grep -q '^miga80_stop_report=1$' \
            "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
@@ -219,4 +231,15 @@ if [ "$MIGA80_MODE" = STOPTEST ]; then
   /bin/cp "$MIGA80_REPORT" \
     "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-stop-fs-uae.txt"
   printf 'PASS  input.device Escape stopped guarded, unguarded, and stalled code\n'
+fi
+
+if [ "$MIGA80_MODE" = GRAPHICSTEST ] || [ "$MIGA80_MODE" = GRAPHICSTEST_DIRECT ]; then
+  if [ "$MIGA80_MODE" = GRAPHICSTEST ]; then
+    MIGA80_GRAPHICS_REPORT=source-view-adf-graphics-fs-uae.txt
+  else
+    MIGA80_GRAPHICS_REPORT=source-view-adf-graphics-direct-fs-uae.txt
+  fi
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/$MIGA80_GRAPHICS_REPORT"
+  printf 'PASS  native PLANAR blitter and PIXEL CPU match reference and both playfields\n'
 fi

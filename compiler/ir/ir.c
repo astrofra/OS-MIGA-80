@@ -430,26 +430,30 @@ static int lower_statement_list(struct lower_context *context,
                                   statement->column, context->diagnostic)) {
                 return 0;
             }
-        } else if (statement->kind == MIGA80_AST_CALL_PSET) {
+        } else if (statement->kind == MIGA80_AST_CALL_PSET ||
+                   statement->kind == MIGA80_AST_CALL_LAYER ||
+                   statement->kind == MIGA80_AST_CALL_LINE) {
+            const unsigned int count = statement->kind == MIGA80_AST_CALL_LAYER
+                ? 1U : statement->kind == MIGA80_AST_CALL_LINE ? 5U : 3U;
+            const enum miga80_ir_opcode opcode =
+                statement->kind == MIGA80_AST_CALL_LAYER ? MIGA80_IR_CALL_LAYER :
+                statement->kind == MIGA80_AST_CALL_LINE ? MIGA80_IR_CALL_LINE :
+                                                        MIGA80_IR_CALL_PSET;
             unsigned int argument;
 
-            if (statement->argument_count != MIGA80_MAX_INTRINSIC_ARGUMENTS) {
+            if (statement->argument_count != count) {
                 return fail(context->diagnostic, statement->line,
                             statement->column,
-                            "pset AST argument count is invalid");
+                            "drawing AST argument count is invalid");
             }
-            for (argument = 0U;
-                 argument < MIGA80_MAX_INTRINSIC_ARGUMENTS; ++argument) {
-                if (!lower_node(context->ast,
-                                statement->arguments[argument],
+            for (argument = 0U; argument < count; ++argument) {
+                if (!lower_node(context->ast, statement->arguments[argument],
                                 context->ir, context->diagnostic)) {
                     return 0;
                 }
             }
-            if (!emit_instruction(context->ir, MIGA80_IR_CALL_PSET,
-                                  MIGA80_TYPE_VOID,
-                                  MIGA80_MAX_INTRINSIC_ARGUMENTS,
-                                  statement->line, statement->column,
+            if (!emit_instruction(context->ir, opcode, MIGA80_TYPE_VOID,
+                                  count, statement->line, statement->column,
                                   context->diagnostic)) {
                 return 0;
             }
@@ -923,16 +927,25 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             --stack_size;
             stack[stack_size - 1U] =
                 comparison ? MIGA80_TYPE_BOOL : operand_type;
-        } else if (instruction->opcode == MIGA80_IR_CALL_PSET) {
+        } else if (instruction->opcode == MIGA80_IR_CALL_PSET ||
+                   instruction->opcode == MIGA80_IR_CALL_LAYER ||
+                   instruction->opcode == MIGA80_IR_CALL_LINE) {
+            const unsigned int count = instruction->opcode == MIGA80_IR_CALL_LAYER
+                ? 1U : instruction->opcode == MIGA80_IR_CALL_LINE ? 5U : 3U;
+            unsigned int argument;
+
             if (instruction->type != MIGA80_TYPE_VOID ||
-                instruction->operand != MIGA80_MAX_INTRINSIC_ARGUMENTS ||
-                stack_size != MIGA80_MAX_INTRINSIC_ARGUMENTS ||
-                stack[0] != MIGA80_TYPE_I32 ||
-                stack[1] != MIGA80_TYPE_I32 ||
-                stack[2] != MIGA80_TYPE_U8) {
-                return fail(diagnostic, instruction->line,
-                            instruction->column,
-                            "typed IR pset call has invalid arguments");
+                instruction->operand != count || stack_size != count) {
+                return fail(diagnostic, instruction->line, instruction->column,
+                            "typed IR drawing call has invalid arguments");
+            }
+            for (argument = 0U; argument < count; ++argument) {
+                if (stack[argument] != (argument + 1U == count
+                        ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32)) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column,
+                                "typed IR drawing call has invalid types");
+                }
             }
             stack_size = 0U;
         } else if (instruction->opcode == MIGA80_IR_BRANCH_FALSE) {
@@ -1341,6 +1354,23 @@ int miga80_evaluate_ir_with_runtime(
             case MIGA80_IR_JUMP:
                 current_block = block->successors[0];
                 transferred = 1;
+                break;
+            case MIGA80_IR_CALL_LAYER:
+                if (runtime == NULL || runtime->layer == NULL ||
+                    !runtime->layer(runtime->context, stack[0])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column, "layer runtime service failed");
+                }
+                stack_size = 0U;
+                break;
+            case MIGA80_IR_CALL_LINE:
+                if (runtime == NULL || runtime->line == NULL ||
+                    !runtime->line(runtime->context, stack[0], stack[1],
+                                   stack[2], stack[3], stack[4])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column, "line runtime service failed");
+                }
+                stack_size = 0U;
                 break;
             case MIGA80_IR_CALL_PSET:
                 {

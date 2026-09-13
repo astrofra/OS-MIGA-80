@@ -15,6 +15,11 @@ graphics-report schema tests. It also compiles and inspects the Hunk
 executables, runs the hosted bootstrap through `vamos` and FS-UAE, then
 executes the 256 × 256 AGA screen regression under FS-UAE.
 
+Native drawing now targets both playfields: `layer(PIXEL)` selects PF1/front
+with CPU Bresenham and C2P; `layer(PLANAR)` selects PF2/back with direct blitter
+line mode. The ADF includes `DATA/LAYERS.LUA`. See
+[drawing primitives and tests](documentation/MIGA-80-drawing-primitives.md).
+
 Run only the portable three-layer graphics oracle natively with:
 
 ```sh
@@ -57,7 +62,8 @@ initialized declarations, reassignment, one final return, arithmetic, all six
 comparisons (`!=` aliases `~=`), nested `if`/`then`/`else`/`end`, and nested
 `while`/`do`/`end` loops with loop-carried values, `break`, and `continue`.
 It also accepts an explicit `void` result and the statement-only
-`pset(i32, i32, u8)` runtime intrinsic used by the vertical slice.
+`pset(i32, i32, u8)`, `layer(PLANAR/PIXEL)`, and
+`line(i32, i32, i32, i32, u8)` runtime intrinsics used by the vertical slice.
 Signed integer `/` truncates toward zero, unsigned integer `/` uses `DIVU.L`, and
 statement-only `/=` follows the target numeric type; all use controlled
 division-by-zero faults. Narrow arithmetic wraps at its declared width and is

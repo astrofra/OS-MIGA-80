@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 7 ]; then
-  printf 'Usage: %s program source font startup readme license output.adf\n' "$0" >&2
+if [ "$#" -ne 8 ]; then
+  printf 'Usage: %s program source font startup readme license output.adf layers-source\n' "$0" >&2
   exit 1
 fi
 
@@ -14,6 +14,7 @@ MIGA80_STARTUP="$4"
 MIGA80_README="$5"
 MIGA80_LICENSE="$6"
 MIGA80_ADF="$7"
+MIGA80_LAYERS="$8"
 MIGA80_MANIFEST="${MIGA80_ADF%.adf}.manifest.txt"
 MIGA80_OUTPUT_DIR="$(dirname "$MIGA80_ADF")"
 
@@ -26,7 +27,7 @@ done
 
 for input in \
   "$MIGA80_PROGRAM" "$MIGA80_SOURCE" "$MIGA80_FONT" \
-  "$MIGA80_STARTUP" "$MIGA80_README" "$MIGA80_LICENSE"; do
+  "$MIGA80_STARTUP" "$MIGA80_README" "$MIGA80_LICENSE" "$MIGA80_LAYERS"; do
   if [ ! -f "$input" ]; then
     printf 'Required ADF input not found: %s\n' "$input" >&2
     exit 1
@@ -43,6 +44,7 @@ xdftool -f "$MIGA80_ADF" \
   + write "$MIGA80_STARTUP" S/Startup-Sequence \
   + write "$MIGA80_PROGRAM" MIGA80 \
   + write "$MIGA80_SOURCE" DATA/DEFAULT.LUA \
+  + write "$MIGA80_LAYERS" DATA/LAYERS.LUA \
   + write "$MIGA80_FONT" DATA/FONT4X8.BIN \
   + write "$MIGA80_README" README.TXT \
   + write "$MIGA80_LICENSE" LICENSE.TXT \
@@ -65,6 +67,8 @@ MIGA80_FONT_SHA256="$(/usr/bin/shasum -a 256 "$MIGA80_FONT" | /usr/bin/awk '{pri
   printf 'source_sha256=%s\n' "$MIGA80_SOURCE_SHA256"
   printf 'font_sha256=%s\n' "$MIGA80_FONT_SHA256"
   printf 'source_path=DATA/DEFAULT.LUA\n'
+  printf 'layers_path=DATA/LAYERS.LUA\n'
+  printf 'layers_sha256=%s\n' "$(/usr/bin/shasum -a 256 "$MIGA80_LAYERS" | /usr/bin/awk '{print $1}')"
   printf 'font_path=DATA/FONT4X8.BIN\n'
   printf 'runtime_report_path=RAM:MIGA80-BOOTED.TXT\n'
   printf '\nfilesystem_listing:\n'

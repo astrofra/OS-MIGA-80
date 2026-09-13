@@ -49,6 +49,8 @@ enum miga80_ir_opcode {
     MIGA80_IR_GE_U32,
     MIGA80_IR_NORMALIZE_INTEGER,
     MIGA80_IR_CALL_PSET,
+    MIGA80_IR_CALL_LAYER,
+    MIGA80_IR_CALL_LINE,
     MIGA80_IR_BRANCH_FALSE,
     MIGA80_IR_JUMP,
     MIGA80_IR_RETURN
@@ -88,6 +90,9 @@ struct miga80_ir_function {
 struct miga80_ir_runtime {
     void *context;
     int (*pset)(void *context, uint32_t x, uint32_t y, uint32_t color);
+    int (*layer)(void *context, uint32_t layer);
+    int (*line)(void *context, uint32_t x0, uint32_t y0, uint32_t x1,
+                uint32_t y1, uint32_t color);
 };
 
 int miga80_lower_function(const struct miga80_ast_function *ast,

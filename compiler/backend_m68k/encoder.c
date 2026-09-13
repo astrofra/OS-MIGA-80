@@ -221,6 +221,25 @@ static int emit_instruction(
     case MIGA80_IR_GT_U32:
     case MIGA80_IR_GE_U32:
         return emit_binary(encoder, instruction);
+    case MIGA80_IR_CALL_LAYER:
+        return emit_u16(encoder, UINT16_C(0x201f)) &&
+               emit_u16(encoder, UINT16_C(0x206d)) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET) &&
+               emit_u16(encoder, UINT16_C(0x4e90));
+    case MIGA80_IR_CALL_LINE:
+        /* Keep all five evaluated arguments on stack across the setup call. */
+        return emit_u16(encoder, UINT16_C(0x202f)) && emit_u16(encoder, 16U) &&
+               emit_u16(encoder, UINT16_C(0x222f)) && emit_u16(encoder, 12U) &&
+               emit_u16(encoder, UINT16_C(0x2417)) &&
+               emit_u16(encoder, UINT16_C(0x206d)) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET) &&
+               emit_u16(encoder, UINT16_C(0x4e90)) &&
+               emit_u16(encoder, UINT16_C(0x202f)) && emit_u16(encoder, 8U) &&
+               emit_u16(encoder, UINT16_C(0x222f)) && emit_u16(encoder, 4U) &&
+               emit_u16(encoder, UINT16_C(0x206d)) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_LINE_END_HANDLER_OFFSET) &&
+               emit_u16(encoder, UINT16_C(0x4e90)) &&
+               emit_u16(encoder, UINT16_C(0x4fef)) && emit_u16(encoder, 20U);
     case MIGA80_IR_CALL_PSET:
         return emit_u16(encoder, UINT16_C(0x241f)) && /* color -> d2 */
                emit_u16(encoder, UINT16_C(0x221f)) && /* y -> d1 */
@@ -698,19 +717,27 @@ static int o1_emit_call_argument(
                    "direct O1 call argument has no location");
 }
 
-static int o1_emit_pset(struct encoder *encoder,
-                        const struct miga80_value_function *function,
-                        const struct allocation_plan *plan,
-                        const struct miga80_value_instruction *value)
+static int o1_emit_runtime_call(struct encoder *encoder,
+                               const struct miga80_value_function *function,
+                               const struct allocation_plan *plan,
+                               const struct miga80_value_instruction *value)
 {
-    return o1_emit_call_argument(encoder, function, plan, value->left) &&
-           o1_emit_call_argument(encoder, function, plan, value->right) &&
-           o1_emit_call_argument(encoder, function, plan, value->third) &&
-           emit_u16(encoder, UINT16_C(0x241f)) &&
-           emit_u16(encoder, UINT16_C(0x221f)) &&
-           emit_u16(encoder, UINT16_C(0x201f)) &&
-           emit_u16(encoder, UINT16_C(0x206d)) &&
-           emit_u16(encoder, MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET) &&
+    const unsigned int arguments[3] = {value->left, value->right, value->third};
+    const unsigned int count = miga80_value_call_arguments(value->opcode);
+    unsigned int index;
+
+    for (index = 0U; index < count; ++index) {
+        if (!o1_emit_call_argument(encoder, function, plan, arguments[index])) {
+            return 0;
+        }
+    }
+    for (index = count; index > 0U; --index) {
+        if (!emit_u16(encoder, (uint16_t)(0x201fU | ((index - 1U) << 9)))) {
+            return 0;
+        }
+    }
+    return emit_u16(encoder, UINT16_C(0x206d)) &&
+           emit_u16(encoder, (uint16_t)miga80_value_call_offset(value->opcode)) &&
            emit_u16(encoder, UINT16_C(0x4e90));
 }
 
@@ -726,8 +753,8 @@ static int o1_emit_value(struct encoder *encoder,
     unsigned int source = value->right;
     int emitted;
 
-    if (value->opcode == MIGA80_VALUE_CALL_PSET) {
-        return o1_emit_pset(encoder, function, plan, value);
+    if (miga80_value_call_arguments(value->opcode) != 0U) {
+        return o1_emit_runtime_call(encoder, function, plan, value);
     }
     if (value->opcode == MIGA80_VALUE_NEG) {
         emitted = o1_emit_move(encoder, function, plan, value->left,
@@ -1396,6 +1423,16 @@ static int encode_m68k_o1(uint8_t *bytes, size_t capacity,
          * three staged pset arguments and its return PC, plus edge scratch.
          * Ordinary user calls are outside this encoder's accepted subset. */
         *required_stack_bytes = (size_t)frame_size + 64U;
+        /* Layer/line services enter the bounded C drawing runtime. Plain
+         * pset-only programs retain the original assembly fast-path bound. */
+        for (reg = 0U; reg < function->value_count; ++reg) {
+            if (function->values[reg].live &&
+                miga80_value_call_arguments(function->values[reg].opcode) != 0U &&
+                function->values[reg].opcode != MIGA80_VALUE_CALL_PSET) {
+                *required_stack_bytes += 1024U;
+                break;
+            }
+        }
         for (reg = 3U; reg < MIGA80_DATA_REGISTER_COUNT; ++reg) {
             if (plan->saved_registers[reg]) {
                 *required_stack_bytes += 4U;

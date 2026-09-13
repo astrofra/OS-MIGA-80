@@ -1,10 +1,11 @@
 miga80_stop_report=1
 supervision=exec-task
-stopped_runs=10
+stopped_runs=13
 input_device_escape=pass
 guarded_loop=pass
 unguarded_loop=pass
 stalled_service=pass
+planar_blitter=pass
 held_escape=pass
 run_key_not_replayed=pass
 source_return=pass

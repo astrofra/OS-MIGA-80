@@ -71,7 +71,7 @@ static int opcode_has_left(enum miga80_value_opcode opcode)
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
             opcode <= MIGA80_VALUE_GE_U32) ||
-           opcode == MIGA80_VALUE_CALL_PSET ||
+           miga80_value_call_arguments(opcode) >= 1U ||
            opcode == MIGA80_VALUE_PHI;
 }
 
@@ -85,13 +85,13 @@ static int opcode_has_right(enum miga80_value_opcode opcode)
            (opcode >= MIGA80_VALUE_EQ && opcode <= MIGA80_VALUE_GE_I32) ||
            (opcode >= MIGA80_VALUE_LT_U32 &&
             opcode <= MIGA80_VALUE_GE_U32) ||
-           opcode == MIGA80_VALUE_CALL_PSET ||
+           miga80_value_call_arguments(opcode) >= 2U ||
            opcode == MIGA80_VALUE_PHI;
 }
 
 static int opcode_has_third(enum miga80_value_opcode opcode)
 {
-    return opcode == MIGA80_VALUE_CALL_PSET;
+    return miga80_value_call_arguments(opcode) >= 3U;
 }
 
 static int opcode_is_commutative(enum miga80_value_opcode opcode)
@@ -206,7 +206,7 @@ static int validate_value_function(
         if (!value->live) {
             continue;
         }
-        if ((value->opcode == MIGA80_VALUE_CALL_PSET
+        if ((miga80_value_call_arguments(value->opcode) != 0U
                  ? value->type != MIGA80_TYPE_VOID
                  : !miga80_type_is_value(value->type)) ||
             value->opcode < MIGA80_VALUE_CONSTANT ||
@@ -322,12 +322,15 @@ static int validate_value_function(
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 parameter index");
         }
-        if (value->opcode == MIGA80_VALUE_CALL_PSET &&
-            (function->values[value->left].type != MIGA80_TYPE_I32 ||
-             function->values[value->right].type != MIGA80_TYPE_I32 ||
-             function->values[value->third].type != MIGA80_TYPE_U8)) {
-            return fail(diagnostic, value->line, value->column,
-                        "invalid O1 pset call");
+        if (miga80_value_call_arguments(value->opcode) != 0U) {
+            const unsigned int count = miga80_value_call_arguments(value->opcode);
+            if (function->values[value->left].type !=
+                    (count == 1U ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32) ||
+                (count >= 2U && function->values[value->right].type != MIGA80_TYPE_I32) ||
+                (count == 3U && function->values[value->third].type != MIGA80_TYPE_U8)) {
+                return fail(diagnostic, value->line, value->column,
+                            "invalid O1 drawing call");
+            }
         }
         if (value->opcode == MIGA80_VALUE_PHI &&
             (value->left_block >= function->block_count ||
@@ -562,7 +565,7 @@ static int build_cfg_liveness(
                 continue;
             }
             live_set_remove(live, value_index);
-            if (value->opcode == MIGA80_VALUE_CALL_PSET) {
+            if (miga80_value_call_arguments(value->opcode) != 0U) {
                 unsigned int live_value;
 
                 for (live_value = 0U; live_value < function->value_count;
@@ -1037,7 +1040,7 @@ static int build_allocation_plan(
                 value->opcode == MIGA80_VALUE_PHI) {
                 continue;
             }
-            if (value->opcode == MIGA80_VALUE_CALL_PSET) {
+            if (miga80_value_call_arguments(value->opcode) != 0U) {
                 for (owner_index = 0U;
                      owner_index < 3U && owner_index < register_count;
                      ++owner_index) {
@@ -1590,22 +1593,28 @@ static int emit_call_argument(
     return 0;
 }
 
-static int emit_pset_call(FILE *output,
-                          const struct miga80_value_function *function,
-                          const struct allocation_plan *plan,
-                          const struct miga80_value_instruction *value)
+static int emit_runtime_call(FILE *output,
+                             const struct miga80_value_function *function,
+                             const struct allocation_plan *plan,
+                             const struct miga80_value_instruction *value)
 {
-    return emit_call_argument(output, function, plan, value->left) &&
-           emit_call_argument(output, function, plan, value->right) &&
-           emit_call_argument(output, function, plan, value->third) &&
-           output_line(
-               output,
-               "        move.l  (%%a7)+,%%d2\n"
-               "        move.l  (%%a7)+,%%d1\n"
-               "        move.l  (%%a7)+,%%d0\n"
-               "        movea.l %u(%%a5),%%a0\n"
-               "        jsr     (%%a0)\n",
-               MIGA80_ABI_RUNTIME_PSET_HANDLER_OFFSET);
+    const unsigned int arguments[3] = {value->left, value->right, value->third};
+    const unsigned int count = miga80_value_call_arguments(value->opcode);
+    unsigned int index;
+
+    for (index = 0U; index < count; ++index) {
+        if (!emit_call_argument(output, function, plan, arguments[index])) {
+            return 0;
+        }
+    }
+    for (index = count; index > 0U; --index) {
+        if (!output_line(output, "        move.l  (%%a7)+,%%d%u\n", index - 1U)) {
+            return 0;
+        }
+    }
+    return output_line(output,
+        "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n",
+        miga80_value_call_offset(value->opcode));
 }
 
 static int emit_value(FILE *output,
@@ -1619,8 +1628,8 @@ static int emit_value(FILE *output,
     unsigned int source = value->right;
     int emitted;
 
-    if (value->opcode == MIGA80_VALUE_CALL_PSET) {
-        return emit_pset_call(output, function, plan, value);
+    if (miga80_value_call_arguments(value->opcode) != 0U) {
+        return emit_runtime_call(output, function, plan, value);
     }
 
     if (value->opcode == MIGA80_VALUE_NEG) {

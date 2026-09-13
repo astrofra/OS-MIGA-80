@@ -14,6 +14,13 @@
 #define MIGA80_ABI_RUNTIME_FAULT_LINE_OFFSET 28
 #define MIGA80_ABI_RUNTIME_FAULT_COLUMN_OFFSET 32
 #define MIGA80_ABI_RUNTIME_GUARDED_CONTEXT_SIZE 36
+#define MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET 36
+#define MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET 40
+#define MIGA80_ABI_RUNTIME_LINE_END_HANDLER_OFFSET 44
+#define MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET 48
+#define MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE 52
+#define MIGA80_LAYER_PLANAR 0
+#define MIGA80_LAYER_PIXEL 1
 #define MIGA80_ABI_FAULT_DIVISION_BY_ZERO 1
 #define MIGA80_ABI_FAULT_CONVERSION_OUT_OF_RANGE 2
 #define MIGA80_ABI_FAULT_EXECUTION_BUDGET 3
@@ -33,6 +40,15 @@ struct miga80_runtime_context {
     uint32_t fault_code;
     uint32_t fault_line;
     uint32_t fault_column;
+};
+
+/* Optional drawing profile; the legacy guarded prefix stays byte-identical. */
+struct miga80_drawing_context {
+    struct miga80_runtime_context runtime;
+    uint32_t layer_handler;
+    uint32_t line_start_handler;
+    uint32_t line_end_handler;
+    uint32_t drawing_state;
 };
 #endif
 #endif
