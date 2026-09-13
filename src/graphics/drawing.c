@@ -1,4 +1,5 @@
 #include "graphics/drawing.h"
+#include <string.h>
 
 static unsigned int outcode(int32_t x, int32_t y)
 {
@@ -74,6 +75,7 @@ void miga80_draw_pset(struct miga80_draw_surface *surface,
         return;
     }
     if (surface->layer == MIGA80_LAYER_PIXEL) {
+        surface->pixel_written = 1U;
         surface->pixels[y * MIGA80_DRAW_WIDTH + x] = (uint8_t)color;
         return;
     }
@@ -169,4 +171,30 @@ uint8_t miga80_draw_planar_pixel(const struct miga80_draw_surface *surface,
         }
     }
     return color;
+}
+
+void miga80_draw_clear(struct miga80_draw_surface *surface, uint32_t color)
+{
+    unsigned int plane;
+    if (color > 15U) { return; }
+    if (surface->layer == MIGA80_LAYER_PIXEL) {
+        memset(surface->pixels, (int)color, MIGA80_DRAW_WIDTH * MIGA80_DRAW_HEIGHT);
+        surface->pixel_written = 1U;
+    } else if (surface->clear != NULL) {
+        surface->clear(surface->owner, color);
+    } else {
+        for (plane = 0U; plane < 4U; ++plane) {
+            memset(surface->planes[plane], (color & (1U << plane)) != 0U ? 255 : 0,
+                   MIGA80_DRAW_PLANE_BYTES);
+        }
+    }
+}
+
+void miga80_draw_flip(struct miga80_draw_surface *surface)
+{
+    if (surface->flip != NULL) { surface->flip(surface->owner); }
+}
+uint32_t miga80_draw_time(struct miga80_draw_surface *surface)
+{
+    return surface->time != NULL ? surface->time(surface->owner) : 0U;
 }

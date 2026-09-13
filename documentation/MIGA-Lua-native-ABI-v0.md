@@ -116,7 +116,7 @@ edge checks for zero before decrementing, changes only CCR on the permitted
 path, and reports fault 3 through the core handler on exhaustion. Unguarded
 O0/O1 oracle images retain their original context requirements.
 
-The optional drawing profile extends the guarded prefix to 52 bytes:
+The optional drawing profile extends the guarded prefix to 72 bytes:
 
 | Offset | Drawing profile field |
 |---:|---|
@@ -124,6 +124,11 @@ The optional drawing profile extends the guarded prefix to 52 bytes:
 | `40` | `line_start` handler: D0/D1/D2 = x0/y0/color |
 | `44` | `line_end` handler: D0/D1 = x1/y1 |
 | `48` | Private drawing-surface pointer used by trusted shims |
+| `52` | `sin` handler: D0 = Q16.16 radians, returns Q16.16 in D0 |
+| `56` | `cos` handler: same signature as `sin` |
+| `60` | `time` handler: no arguments, returns Q16.16 seconds in D0 |
+| `64` | `cls` handler: D0 = u8 color, no result |
+| `68` | `flip` handler: no arguments or result |
 
 `layer(PLANAR)` and `layer(PIXEL)` are symbolic source intrinsics. A source
 `line(x0,y0,x1,y1,color)` evaluates all arguments before the two ordered calls;
@@ -131,8 +136,11 @@ the split preserves the three-scalar-register ABI. Both services have the same
 clobber contract as `pset`. Neither returns a value. The extended pset shim
 uses the surface's current layer; PIXEL remains the initial selection. Legacy
 pset-only runtime fixtures keep their original context and assembly service.
-Programs with live layer/line calls reserve an additional 1,024 stack bytes
-for trusted C drawing helpers. See [drawing primitives](MIGA-80-drawing-primitives.md).
+Programs with live drawing, trig or clock calls other than pset reserve an additional 1,024 stack bytes
+for trusted C helpers. Values live across any call survive its caller-saved
+clobbers; returning calls produce a newly allocated value from D0. See
+[drawing primitives](MIGA-80-drawing-primitives.md) and
+[animation semantics](MIGA-80-cube-animation.md).
 
 ## Stack and frame contract
 

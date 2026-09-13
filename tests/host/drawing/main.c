@@ -194,7 +194,7 @@ int main(int argc, char **argv)
     static struct miga80_ir_function ir;
     static struct miga80_value_function value;
     struct miga80_diagnostic diagnostic;
-    struct miga80_ir_runtime runtime = {&surface, oracle_pset, oracle_layer, oracle_line};
+    struct miga80_ir_runtime runtime = {&surface, oracle_pset, oracle_layer, oracle_line, NULL, NULL, NULL};
     uint8_t code[4096];
     char source[4097];
     size_t size, code_size, bound;

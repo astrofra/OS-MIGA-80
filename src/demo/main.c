@@ -92,6 +92,7 @@ static struct miga80_drawing_context last_drawing_context;
 #define last_runtime last_drawing_context.runtime
 static uint32_t last_planar_checksum;
 static ULONG last_planar_lines;
+static ULONG last_animation_frames, last_animation_elapsed;
 static uint32_t last_framebuffer_checksum;
 static uint32_t execution_budget = DEMO_EXECUTION_BUDGET;
 static int force_runtime_fault;
@@ -103,6 +104,7 @@ static struct miga80_supervisor_observation last_supervisor;
 static int test_graphics;
 static int last_graphics_readback;
 static int test_escape;
+static ULONG test_escape_delay = 100000U;
 static int test_unguarded;
 static int test_stalled_service;
 static unsigned int compile_attempts;
@@ -119,11 +121,17 @@ typedef char drawing_context_layout_check[
     sizeof(struct miga80_drawing_context) == MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE &&
     offsetof(struct miga80_drawing_context, drawing_state) ==
         MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET &&
-    offsetof(struct miga80_draw_surface, layer) == 0U ? 1 : -1];
+    offsetof(struct miga80_draw_surface, layer) == 0U &&
+    offsetof(struct miga80_draw_surface, pixel_written) == 4U ? 1 : -1];
 
 extern ULONG miga80_execute_generated(APTR code, APTR runtime_context);
 extern void miga80_runtime_pset(void);
 extern void miga80_runtime_draw_pset(void);
+extern void miga80_runtime_sin(void);
+extern void miga80_runtime_cos(void);
+extern void miga80_runtime_time(void);
+extern void miga80_runtime_cls(void);
+extern void miga80_runtime_flip(void);
 extern void miga80_runtime_layer(void);
 extern void miga80_runtime_line_start(void);
 extern void miga80_runtime_line_end(void);
@@ -773,6 +781,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     last_framebuffer_checksum = 0U;
     last_planar_checksum = 0U;
     last_planar_lines = 0U;
+    last_animation_frames = last_animation_elapsed = 0U;
     last_graphics_readback = 0;
     (void)memset(&last_runtime, 0, sizeof(last_runtime));
     error_status[0] = '\0';
@@ -866,6 +875,24 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         failure = "drawing_memory";
         goto cleanup;
     }
+    {
+        unsigned int value;
+        int animated = 0;
+        for (value = 0U; value < value_ir->value_count; ++value) {
+            if (value_ir->values[value].live &&
+                (value_ir->values[value].opcode == MIGA80_VALUE_CALL_FLIP ||
+                 value_ir->values[value].opcode == MIGA80_VALUE_CALL_TIME)) { animated = 1; }
+        }
+        if (animated && !miga80_host_drawing_animate(drawing, screen, &run_events.drawing)) {
+            failure = "animation_memory";
+            goto cleanup;
+        }
+    }
+    last_drawing_context.sin_handler = (uint32_t)(uintptr_t)miga80_runtime_sin;
+    last_drawing_context.cos_handler = (uint32_t)(uintptr_t)miga80_runtime_cos;
+    last_drawing_context.time_handler = (uint32_t)(uintptr_t)miga80_runtime_time;
+    last_drawing_context.cls_handler = (uint32_t)(uintptr_t)miga80_runtime_cls;
+    last_drawing_context.flip_handler = (uint32_t)(uintptr_t)miga80_runtime_flip;
     last_drawing_context.layer_handler = (uint32_t)(uintptr_t)miga80_runtime_layer;
     last_drawing_context.line_start_handler = (uint32_t)(uintptr_t)miga80_runtime_line_start;
     last_drawing_context.line_end_handler = (uint32_t)(uintptr_t)miga80_runtime_line_end;
@@ -886,7 +913,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         int supervised;
 
         if (test_escape) {
-            injector = miga80_stop_injector_start(&run_events.input_test);
+            injector = miga80_stop_injector_start(&run_events.input_test, test_escape_delay);
             if (injector == NULL) {
                 failure = "stop_injector_setup";
                 goto cleanup;
@@ -937,6 +964,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         goto cleanup;
     }
     miga80_host_drawing_flush(drawing);
+    miga80_host_drawing_finish(drawing);
     framebuffer_checksum = miga80_source_view_checksum(
         chunky, DEMO_CHUNKY_BYTES);
     last_framebuffer_checksum = framebuffer_checksum;
@@ -964,7 +992,11 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
 
 cleanup:
     if (drawing != NULL) {
-        const struct miga80_draw_surface *surface = miga80_host_drawing_surface(drawing);
+        const struct miga80_draw_surface *surface;
+        miga80_host_drawing_finish(drawing);
+        last_animation_frames = miga80_host_drawing_frames(drawing);
+        last_animation_elapsed = miga80_host_drawing_elapsed(drawing);
+        surface = miga80_host_drawing_surface(drawing);
         last_planar_checksum = miga80_source_view_checksum(surface->planes[0],
                                                           4U * MIGA80_DRAW_PLANE_BYTES);
         last_planar_lines = miga80_host_drawing_lines(drawing);
@@ -1590,6 +1622,70 @@ static int write_stop_report(const char *path, int passed)
     return success;
 }
 
+static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
+    const struct Miga80SourceViewMetrics *metrics)
+{
+    char *source = AllocMem(DEMO_SOURCE_CAPACITY + 1U, MEMF_PUBLIC);
+    ULONG baseline = 0U;
+    unsigned int round;
+    int success = 0;
+    if (source == NULL) { return 0; }
+    (void)strcpy(source, source_buffer);
+    test_escape_delay = 500000U;
+    /* Stop after several displayed frames, then repeat without resource growth. */
+    for (round = 0U; round < 3U; ++round) {
+        workflow_failure = "cube_escape";
+        if (!stop_case(screen, chunky, source, 1, 0, NULL) ||
+            last_animation_frames < 2U) { goto done; }
+        if (round == 0U) { baseline = AvailMem(MEMF_PUBLIC); }
+        else if (AvailMem(MEMF_PUBLIC) < baseline) {
+            workflow_failure = "cube_stop_memory_growth"; goto done;
+        }
+    }
+    for (round = 0U; round < 2U; ++round) {
+        enum demo_state state = DEMO_STATE_SOURCE;
+        workflow_failure = "cube_native";
+        if (workflow_key(screen, chunky, metrics, NULL, &state, DEMO_RAWKEY_F5, 0U) != 0 ||
+            state != DEMO_STATE_RESULT || last_animation_frames < 2U ||
+            last_planar_lines != last_animation_frames * 12U ||
+            last_animation_elapsed < 10U * 65536U || last_animation_elapsed >= 11U * 65536U ||
+            !verify_display_palette()) { goto done; }
+        workflow_failure = "cube_source_return";
+        if (workflow_key(screen, chunky, metrics, NULL, &state, DEMO_RAWKEY_ESCAPE, 0U) != 0 ||
+            state != DEMO_STATE_SOURCE || !verify_source_view(screen, chunky)) { goto done; }
+        workflow_failure = "cube_memory_growth";
+        if (AvailMem(MEMF_PUBLIC) < baseline) { goto done; }
+        if (round == 1U && workflow_key(screen, chunky, metrics, NULL, &state,
+                0x10U, IEQUALIFIER_CONTROL) != 1) { goto done; }
+    }
+    workflow_failure = NULL;
+    success = 1;
+done:
+    test_escape_delay = 100000U;
+    FreeMem(source, DEMO_SOURCE_CAPACITY + 1U);
+    return success;
+}
+
+static int write_cube_report(const char *path, int success)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int written;
+    if (output == 0) { return 0; }
+    written = write_text(output, "miga80_cube_report=1\n") &&
+        write_text(output, "frames=") && write_decimal(output, last_animation_frames) &&
+        write_text(output, "\nelapsed_q16=") && write_decimal(output, last_animation_elapsed) &&
+        (success ? write_text(output,
+            "\nlua_native=pass\ndouble_buffer=pass\nblitter_edges=pass\n"
+            "clock_ten_seconds=pass\nescape_animation=pass\nreplay=pass\nmemory_no_growth=pass\n"
+            "source_return=pass\nctrl_q_exit=pass\n"
+            "hosted_cleanup=pass\nresult=pass\n") :
+            (write_text(output, "\nfailure=") &&
+             write_text(output, last_failure != NULL ? last_failure :
+                 workflow_failure != NULL ? workflow_failure : "cube_setup") &&
+             write_text(output, "\nresult=fail\n")));
+    return Close(output) && written;
+}
+
 int main(int argc, char **argv)
 {
     static struct TagItem video_control[] = {
@@ -1633,6 +1729,8 @@ int main(int argc, char **argv)
         argc > 1 && argv[1][0] != '\0' ? argv[1] : DEMO_DEFAULT_SOURCE;
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
+    const int cubetest = argc > 3 && strcmp(argv[3], "CUBETEST") == 0;
+    const int cube = argc > 3 && strcmp(argv[3], "CUBE") == 0;
     const int selftest = argc > 3 && strcmp(argv[3], "SELFTEST") == 0;
     const int graphicstest = argc > 3 && strcmp(argv[3], "GRAPHICSTEST") == 0;
     const int stoptest = argc > 3 && strcmp(argv[3], "STOPTEST") == 0;
@@ -1767,7 +1865,16 @@ int main(int argc, char **argv)
     }
 
     success = 1;
-    if (graphicstest) {
+    if (cubetest) {
+        success = run_cube_regression(screen, chunky, &metrics);
+    } else if (cube) {
+        char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+        const int completed = compile_and_run(screen, chunky, &metrics, report_path,
+            error_status, sizeof(error_status));
+        success = show_source_status(screen, chunky, completed
+            ? "CUBE FINISHED - F5 REPLAY - CTRL-Q EXIT" : error_status) &&
+            run_event_loop(window, screen, chunky, &metrics, report_path);
+    } else if (graphicstest) {
         success = run_graphics_regression(screen, chunky);
     } else if (stoptest) {
         success = run_stop_regression(screen, chunky, report_path);
@@ -1824,5 +1931,6 @@ cleanup:
     if (graphicstest && !write_graphics_report(report_path, success)) {
         success = 0;
     }
+    if (cubetest && !write_cube_report(report_path, success)) { success = 0; }
     return success ? RETURN_OK : RETURN_FAIL;
 }

@@ -1,4 +1,4 @@
-MIGA-80 MANDELBROT VERTICAL SLICE
+MIGA-80 LUA GRAPHICS DEMOS
 
 Boot this disk on a PAL Amiga 1200 with Kickstart 3.0 or 3.1.
 MIGA-80 starts automatically and displays the complete default MIGA Lua
@@ -48,3 +48,20 @@ pset uses CPU bit writes in the same command order. The worker owns no DMA.
 
 After Ctrl-Q, load the two-layer example from the Shell and press F5:
 MIGA80:MIGA80 MIGA80:DATA/LAYERS.LUA RAM:MIGA80-BOOTED.TXT
+
+ANIMATED LUA CUBE
+
+The dedicated miga80-cube.adf boots DATA/CUBE.LUA automatically: a fullscreen
+wireframe cube rotating on X and Y, direct blitter lines, four depth shades,
+for ten seconds. X rotates at 0.55 rad/s and Y at 0.8 rad/s.
+The source returns afterward. F5 replays, Esc stops, Ctrl-Q exits.
+Both disks include this source. From the Shell:
+MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA RAM:MIGA80-BOOTED.TXT CUBE
+
+sin(fix) and cos(fix) use radians and return signed Q16.16 values. cls(u8)
+clears the selected layer. flip() publishes the completed hidden bitmap and
+waits until the previous bitmap can be drawn into. Start each PLANAR frame
+with cls(0); flip does not clear it or copy the previous image. time() returns
+fix seconds since the first displayed frame, or zero before the first flip.
+The two animation bitmaps require another 128 KiB of Chip RAM. The editor's
+original bitmap is preserved. Esc also works while waiting for a buffer swap.

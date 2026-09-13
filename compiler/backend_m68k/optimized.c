@@ -206,8 +206,9 @@ static int validate_value_function(
         if (!value->live) {
             continue;
         }
-        if ((miga80_value_call_arguments(value->opcode) != 0U
-                 ? value->type != MIGA80_TYPE_VOID
+        if ((miga80_value_is_call(value->opcode)
+                 ? value->type != (value->opcode >= MIGA80_VALUE_CALL_SIN &&
+                     value->opcode <= MIGA80_VALUE_CALL_TIME ? MIGA80_TYPE_FIX : MIGA80_TYPE_VOID)
                  : !miga80_type_is_value(value->type)) ||
             value->opcode < MIGA80_VALUE_CONSTANT ||
             value->opcode > MIGA80_VALUE_PHI) {
@@ -322,10 +323,11 @@ static int validate_value_function(
             return fail(diagnostic, value->line, value->column,
                         "invalid O1 parameter index");
         }
-        if (miga80_value_call_arguments(value->opcode) != 0U) {
+        if (miga80_value_is_call(value->opcode)) {
             const unsigned int count = miga80_value_call_arguments(value->opcode);
-            if (function->values[value->left].type !=
-                    (count == 1U ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32) ||
+            if ((count > 0U && function->values[value->left].type !=
+                    (value->opcode == MIGA80_VALUE_CALL_SIN || value->opcode == MIGA80_VALUE_CALL_COS
+                        ? MIGA80_TYPE_FIX : count == 1U ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32)) ||
                 (count >= 2U && function->values[value->right].type != MIGA80_TYPE_I32) ||
                 (count == 3U && function->values[value->third].type != MIGA80_TYPE_U8)) {
                 return fail(diagnostic, value->line, value->column,
@@ -565,7 +567,7 @@ static int build_cfg_liveness(
                 continue;
             }
             live_set_remove(live, value_index);
-            if (miga80_value_call_arguments(value->opcode) != 0U) {
+            if (miga80_value_is_call(value->opcode)) {
                 unsigned int live_value;
 
                 for (live_value = 0U; live_value < function->value_count;
@@ -1040,7 +1042,7 @@ static int build_allocation_plan(
                 value->opcode == MIGA80_VALUE_PHI) {
                 continue;
             }
-            if (miga80_value_call_arguments(value->opcode) != 0U) {
+            if (miga80_value_is_call(value->opcode)) {
                 for (owner_index = 0U;
                      owner_index < 3U && owner_index < register_count;
                      ++owner_index) {
@@ -1053,7 +1055,7 @@ static int build_allocation_plan(
                     }
                     owners[owner_index] = MIGA80_INVALID_VALUE;
                 }
-                continue;
+                if (value->type == MIGA80_TYPE_VOID) { continue; }
             }
             if (opcode_has_left(value->opcode)) {
                 left_register = plan->registers[value->left];
@@ -1628,8 +1630,12 @@ static int emit_value(FILE *output,
     unsigned int source = value->right;
     int emitted;
 
-    if (miga80_value_call_arguments(value->opcode) != 0U) {
-        return emit_runtime_call(output, function, plan, value);
+    if (miga80_value_is_call(value->opcode)) {
+        emitted = emit_runtime_call(output, function, plan, value);
+        if (value->type == MIGA80_TYPE_VOID) { return emitted; }
+        return emitted && output_line(output, "        move.l  %%d0,%s\n",
+            data_register_name(destination)) &&
+            store_spilled_result(output, plan, index, destination);
     }
 
     if (value->opcode == MIGA80_VALUE_NEG) {

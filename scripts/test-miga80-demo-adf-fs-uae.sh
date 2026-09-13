@@ -104,6 +104,11 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
+  CUBETEST)
+    printf '%s\n' \
+      'MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT CUBETEST' \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
   AUTORUN|SELFTEST|STOPTEST|GRAPHICSTEST)
     printf '%s\n' \
       "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
@@ -162,6 +167,11 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
            /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
+    elif [ "$MIGA80_MODE" = CUBETEST ]; then
+      if /usr/bin/grep -q '^miga80_cube_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
     elif [ "$MIGA80_MODE" = STOPTEST ]; then
       if /usr/bin/grep -q '^miga80_stop_report=1$' \
            "$MIGA80_CANDIDATE_REPORT" &&
@@ -202,6 +212,19 @@ if ! xdftool "$MIGA80_RUN_ADF" read BOOTED.TXT "$MIGA80_REPORT" \
   exit 1
 fi
 
+if [ "$MIGA80_MODE" = CUBETEST ]; then
+  /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-fs-uae.txt"
+  python3 - "$MIGA80_REPORT" <<'PY_CHECK'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+values = dict(line.split('=', 1) for line in s.splitlines())
+assert int(values.get('frames', '0')) >= 2, s
+assert 10 * 65536 <= int(values.get('elapsed_q16', '0')) < 11 * 65536, s
+p.write_text(''.join(line + '\n' for line in s.splitlines()
+                     if not line.startswith(('frames=', 'elapsed_q16='))))
+PY_CHECK
+fi
 if ! /usr/bin/diff -u "$MIGA80_EXPECTED" "$MIGA80_REPORT"; then
   printf 'The source-view ADF report did not match the expected result.\n' >&2
   exit 1

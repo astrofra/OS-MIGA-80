@@ -435,7 +435,7 @@ static int mark_live_values(struct miga80_value_function *function,
         const struct miga80_value_instruction *value =
             &function->values[value_index];
 
-        if (miga80_value_call_arguments(value->opcode) != 0U &&
+        if (miga80_value_is_call(value->opcode) &&
             !mark_root(function, value_index, worklist, &worklist_size,
                        diagnostic)) {
             return 0;
@@ -1011,6 +1011,24 @@ static int lower_block_values(const struct miga80_ir_function *source,
                                 instruction->column, diagnostic);
             break;
         }
+        case MIGA80_IR_CALL_SIN:
+        case MIGA80_IR_CALL_COS:
+        case MIGA80_IR_CALL_TIME: {
+            const int clock = instruction->opcode == MIGA80_IR_CALL_TIME;
+            value = add_value(result, MIGA80_TYPE_FIX, clock ? MIGA80_VALUE_CALL_TIME :
+                instruction->opcode == MIGA80_IR_CALL_SIN ? MIGA80_VALUE_CALL_SIN : MIGA80_VALUE_CALL_COS,
+                clock ? MIGA80_INVALID_VALUE : stack[--stack_size], MIGA80_INVALID_VALUE,
+                0U, 0U, instruction->line, instruction->column, diagnostic);
+            break;
+        }
+        case MIGA80_IR_CALL_CLS:
+        case MIGA80_IR_CALL_FLIP:
+            value = add_value(result, MIGA80_TYPE_VOID,
+                instruction->opcode == MIGA80_IR_CALL_CLS ? MIGA80_VALUE_CALL_CLS : MIGA80_VALUE_CALL_FLIP,
+                instruction->opcode == MIGA80_IR_CALL_CLS ? stack[--stack_size] : MIGA80_INVALID_VALUE,
+                MIGA80_INVALID_VALUE, 0U, 0U, instruction->line, instruction->column, diagnostic);
+            if (value != MIGA80_INVALID_VALUE) { continue; }
+            break;
         case MIGA80_IR_CALL_LAYER:
             value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_LAYER,
                               stack[--stack_size], MIGA80_INVALID_VALUE,

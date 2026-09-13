@@ -531,6 +531,24 @@ int miga80_emit_gnu_m68k(FILE *output,
                                       (unsigned int)instruction->operand);
             }
             break;
+        case MIGA80_IR_CALL_SIN:
+        case MIGA80_IR_CALL_COS:
+        case MIGA80_IR_CALL_TIME:
+        case MIGA80_IR_CALL_CLS:
+        case MIGA80_IR_CALL_FLIP:
+        {
+            const enum miga80_ir_opcode op = instruction->opcode;
+            const unsigned int offset = op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
+                op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
+                op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
+                op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
+            success = ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP) ||
+                output_line(output, "        move.l  (%%a7)+,%%d0\n")) &&
+                output_line(output, "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n", offset) &&
+                ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP) ||
+                 output_line(output, "        move.l  %%d0,-(%%a7)\n"));
+            break;
+        }
         case MIGA80_IR_CALL_LAYER:
             success = output_line(output,
                 "        move.l  (%%a7)+,%%d0\n"

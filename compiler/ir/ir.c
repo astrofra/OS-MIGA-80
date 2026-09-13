@@ -48,6 +48,16 @@ static int lower_node(const struct miga80_ast_function *ast, int node_index,
     }
     node = &ast->nodes[node_index];
     switch (node->kind) {
+    case MIGA80_AST_SIN:
+    case MIGA80_AST_COS:
+    case MIGA80_AST_TIME:
+        if (node->kind != MIGA80_AST_TIME && !lower_node(ast, node->left, ir, diagnostic)) {
+            return 0;
+        }
+        return emit_instruction(ir, node->kind == MIGA80_AST_TIME ? MIGA80_IR_CALL_TIME :
+            node->kind == MIGA80_AST_SIN ? MIGA80_IR_CALL_SIN : MIGA80_IR_CALL_COS,
+            MIGA80_TYPE_FIX, node->kind == MIGA80_AST_TIME ? 0U : 1U,
+            node->line, node->column, diagnostic);
     case MIGA80_AST_LITERAL_I32:
         return emit_instruction(ir, MIGA80_IR_PUSH_I32, node->type,
                                 node->value,
@@ -432,10 +442,15 @@ static int lower_statement_list(struct lower_context *context,
             }
         } else if (statement->kind == MIGA80_AST_CALL_PSET ||
                    statement->kind == MIGA80_AST_CALL_LAYER ||
-                   statement->kind == MIGA80_AST_CALL_LINE) {
-            const unsigned int count = statement->kind == MIGA80_AST_CALL_LAYER
+                   statement->kind == MIGA80_AST_CALL_LINE ||
+                   statement->kind == MIGA80_AST_CALL_CLS ||
+                   statement->kind == MIGA80_AST_CALL_FLIP) {
+            const unsigned int count = statement->kind == MIGA80_AST_CALL_FLIP ? 0U :
+                statement->kind == MIGA80_AST_CALL_CLS ? 1U : statement->kind == MIGA80_AST_CALL_LAYER
                 ? 1U : statement->kind == MIGA80_AST_CALL_LINE ? 5U : 3U;
             const enum miga80_ir_opcode opcode =
+                statement->kind == MIGA80_AST_CALL_FLIP ? MIGA80_IR_CALL_FLIP :
+                statement->kind == MIGA80_AST_CALL_CLS ? MIGA80_IR_CALL_CLS :
                 statement->kind == MIGA80_AST_CALL_LAYER ? MIGA80_IR_CALL_LAYER :
                 statement->kind == MIGA80_AST_CALL_LINE ? MIGA80_IR_CALL_LINE :
                                                         MIGA80_IR_CALL_PSET;
@@ -927,10 +942,25 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             --stack_size;
             stack[stack_size - 1U] =
                 comparison ? MIGA80_TYPE_BOOL : operand_type;
+        } else if (instruction->opcode == MIGA80_IR_CALL_SIN ||
+                   instruction->opcode == MIGA80_IR_CALL_COS ||
+                   instruction->opcode == MIGA80_IR_CALL_TIME) {
+            const int clock = instruction->opcode == MIGA80_IR_CALL_TIME;
+            if (instruction->type != MIGA80_TYPE_FIX ||
+                instruction->operand != (clock ? 0U : 1U) ||
+                (!clock && (stack_size == 0U || stack[stack_size - 1U] != MIGA80_TYPE_FIX)) ||
+                (clock && stack_size == MIGA80_MAX_IR_STACK)) {
+                return fail(diagnostic, instruction->line, instruction->column,
+                            "typed IR math/clock call has invalid arguments");
+            }
+            if (clock) { stack[stack_size++] = MIGA80_TYPE_FIX; }
         } else if (instruction->opcode == MIGA80_IR_CALL_PSET ||
                    instruction->opcode == MIGA80_IR_CALL_LAYER ||
-                   instruction->opcode == MIGA80_IR_CALL_LINE) {
-            const unsigned int count = instruction->opcode == MIGA80_IR_CALL_LAYER
+                   instruction->opcode == MIGA80_IR_CALL_LINE ||
+                   instruction->opcode == MIGA80_IR_CALL_CLS ||
+                   instruction->opcode == MIGA80_IR_CALL_FLIP) {
+            const unsigned int count = instruction->opcode == MIGA80_IR_CALL_FLIP ? 0U :
+                instruction->opcode == MIGA80_IR_CALL_CLS ? 1U : instruction->opcode == MIGA80_IR_CALL_LAYER
                 ? 1U : instruction->opcode == MIGA80_IR_CALL_LINE ? 5U : 3U;
             unsigned int argument;
 
@@ -1354,6 +1384,26 @@ int miga80_evaluate_ir_with_runtime(
             case MIGA80_IR_JUMP:
                 current_block = block->successors[0];
                 transferred = 1;
+                break;
+            case MIGA80_IR_CALL_SIN:
+                stack[stack_size - 1U] = (uint32_t)miga80_fix_sin((int32_t)stack[stack_size - 1U]);
+                break;
+            case MIGA80_IR_CALL_COS:
+                stack[stack_size - 1U] = (uint32_t)miga80_fix_cos((int32_t)stack[stack_size - 1U]);
+                break;
+            case MIGA80_IR_CALL_TIME:
+                if (runtime == NULL || runtime->time == NULL) { return fail(diagnostic,
+                    instruction->line, instruction->column, "time runtime missing"); }
+                stack[stack_size++] = runtime->time(runtime->context);
+                break;
+            case MIGA80_IR_CALL_CLS:
+                if (runtime == NULL || runtime->cls == NULL ||
+                    !runtime->cls(runtime->context, stack[--stack_size])) {
+                    return fail(diagnostic, instruction->line, instruction->column, "cls runtime failed"); }
+                break;
+            case MIGA80_IR_CALL_FLIP:
+                if (runtime == NULL || runtime->flip == NULL || !runtime->flip(runtime->context)) {
+                    return fail(diagnostic, instruction->line, instruction->column, "flip runtime failed"); }
                 break;
             case MIGA80_IR_CALL_LAYER:
                 if (runtime == NULL || runtime->layer == NULL ||

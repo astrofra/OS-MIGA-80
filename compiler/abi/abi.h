@@ -1,6 +1,8 @@
 #ifndef MIGA80_COMPILER_ABI_H
 #define MIGA80_COMPILER_ABI_H
 
+#include <stdint.h>
+
 #define MIGA80_ABI_VERSION_MAJOR 0U
 #define MIGA80_ABI_VERSION_MINOR 6U
 
@@ -58,5 +60,9 @@ int miga80_abi_register_is_caller_saved(enum miga80_abi_register reg);
 int miga80_abi_register_is_callee_saved(enum miga80_abi_register reg);
 int miga80_abi_frame_size_is_valid(unsigned int size);
 const char *miga80_abi_gnu_register_name(enum miga80_abi_register reg);
+
+/* Radians and result are signed Q16.16; no floating point at runtime. */
+int32_t miga80_fix_sin(int32_t radians);
+int32_t miga80_fix_cos(int32_t radians);
 
 #endif

@@ -40,13 +40,23 @@ enum miga80_value_opcode {
     MIGA80_VALUE_CALL_LAYER,
     MIGA80_VALUE_CALL_LINE_START,
     MIGA80_VALUE_CALL_LINE_END,
+    MIGA80_VALUE_CALL_SIN, MIGA80_VALUE_CALL_COS, MIGA80_VALUE_CALL_TIME,
+    MIGA80_VALUE_CALL_CLS, MIGA80_VALUE_CALL_FLIP,
     MIGA80_VALUE_PHI
 };
+
+static inline int miga80_value_is_call(enum miga80_value_opcode opcode)
+{
+    return opcode >= MIGA80_VALUE_CALL_PSET && opcode <= MIGA80_VALUE_CALL_FLIP;
+}
 
 static inline unsigned int miga80_value_call_arguments(
     enum miga80_value_opcode opcode)
 {
     switch (opcode) {
+    case MIGA80_VALUE_CALL_SIN:
+    case MIGA80_VALUE_CALL_COS:
+    case MIGA80_VALUE_CALL_CLS:
     case MIGA80_VALUE_CALL_LAYER: return 1U;
     case MIGA80_VALUE_CALL_LINE_END: return 2U;
     case MIGA80_VALUE_CALL_LINE_START:
@@ -59,6 +69,11 @@ static inline unsigned int miga80_value_call_offset(
     enum miga80_value_opcode opcode)
 {
     switch (opcode) {
+    case MIGA80_VALUE_CALL_SIN: return MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_COS: return MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_TIME: return MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_CLS: return MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET;
+    case MIGA80_VALUE_CALL_FLIP: return MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
     case MIGA80_VALUE_CALL_LAYER: return MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET;
     case MIGA80_VALUE_CALL_LINE_START:
         return MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET;

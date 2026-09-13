@@ -427,9 +427,9 @@ COMPILER_CALL_MUSASHI_EXPECTED := \
 	tests/execute/call-survival.expected
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
 MIGA80_DEMO_SOURCE := src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
-	src/demo/drawing_host.c src/graphics/drawing.c src/graphics/c2p4_reference.c
+	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c
 MIGA80_DEMO_HEADERS := src/demo/supervisor.h src/demo/stop_test.h \
-	src/demo/drawing_host.h src/graphics/drawing.h src/graphics/c2p4_reference.h
+	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S
 MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \
 	$(COMPILER_FRONTEND_SOURCE) $(COMPILER_IR_SOURCE) \
@@ -733,10 +733,10 @@ miga80-demo-adf: $(MIGA80_DEMO_ADF)
 
 $(MIGA80_DEMO_ADF): $(MIGA80_DEMO_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
 		$(FONT4X8_GENERATED_BINARY) $(MIGA80_DEMO_STARTUP) \
-		$(MIGA80_DEMO_README) LICENSE assets/demo/layers.lua $(MIGA80_DEMO_ADF_BUILDER)
+		$(MIGA80_DEMO_README) LICENSE assets/demo/layers.lua assets/demo/cube.lua $(MIGA80_DEMO_ADF_BUILDER)
 	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) \
 		$(SOURCE_VIEW_FIXTURE) $(FONT4X8_GENERATED_BINARY) \
-		$(MIGA80_DEMO_STARTUP) $(MIGA80_DEMO_README) LICENSE $@ assets/demo/layers.lua
+		$(MIGA80_DEMO_STARTUP) $(MIGA80_DEMO_README) LICENSE $@ assets/demo/layers.lua assets/demo/cube.lua
 
 miga80-demo-adf-inspect: $(MIGA80_DEMO_ADF)
 	xdfscan $(MIGA80_DEMO_ADF)
@@ -1366,7 +1366,7 @@ exclusive-graphics-test-adf-fs-uae: $(EXCLUSIVE_GRAPHICS_TEST_ADF) \
 runtime-compare:
 	./scripts/compare-c-runtimes.sh
 
-check: drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
+check: animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
@@ -1382,3 +1382,34 @@ clean:
 		build/fs-uae-smoke build/fs-uae-physical-adf \
 		build/fs-uae-demo-adf build/generated build/runtime-comparison
 	rm -f $(STAGED_PROGRAM) $(STAGING_DIR)/fs-uae-smoke.out
+
+ANIMATION_TEST_PROGRAM := $(HOST_BUILD_DIR)/animation/test
+$(ANIMATION_TEST_PROGRAM): tests/host/animation/main.c src/graphics/drawing.c \
+        src/graphics/drawing.h $(COMPILER_SOURCES) $(COMPILER_HEADERS) \
+        $(COMPILER_ENCODER_SOURCE) $(COMPILER_ENCODER_HEADER) compiler/abi/runtime.h Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) \
+		-fsanitize=address,undefined tests/host/animation/main.c src/graphics/drawing.c \
+		$(COMPILER_SOURCES) -lm -o $@
+
+.PHONY: animation-test
+animation-test: $(ANIMATION_TEST_PROGRAM) $(COMPILER_ENCODER_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(PYTHON) scripts/test-animation.py $(ANIMATION_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
+		$(TARGET_CC) $(TARGET_AS) $(TARGET_OBJCOPY) >$(REPORT_DIR)/animation-host.txt
+	$(PYTHON) scripts/test-animation-math.py $(COMPILER_ENCODER_TEST_PROGRAM) \
+		$(MIGA68K_TEST_PROGRAM) $(TARGET_AS) $(TARGET_OBJCOPY) >$(REPORT_DIR)/animation-math.txt
+	@cat $(REPORT_DIR)/animation-host.txt $(REPORT_DIR)/animation-math.txt
+
+.PHONY: miga80-cube-adf miga80-cube-fs-uae
+miga80-cube-adf: build/distribution/miga80-cube.adf
+build/distribution/miga80-cube.adf: $(MIGA80_DEMO_PROGRAM) assets/demo/cube.lua \
+        assets/demo/layers.lua assets/demo/Startup-Cube $(MIGA80_DEMO_README) \
+        $(FONT4X8_GENERATED_BINARY) LICENSE $(MIGA80_DEMO_ADF_BUILDER)
+	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) assets/demo/cube.lua \
+		$(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Cube $(MIGA80_DEMO_README) \
+		LICENSE $@ assets/demo/layers.lua assets/demo/cube.lua
+
+miga80-cube-fs-uae: build/distribution/miga80-cube.adf
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \
+		tests/smoke/source-view-adf/cube-expected.txt CUBETEST

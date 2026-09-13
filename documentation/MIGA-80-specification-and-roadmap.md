@@ -1380,6 +1380,12 @@ stress/fault tests remain open. See
 report formats remain regression fixtures so distributed candidate images can
 still be diagnosed, but their timings must not be pooled with format 3.
 
+The next graphics/runtime slice is implemented: a ten-second fullscreen Lua
+wireframe cube, fixed-point trigonometry, depth shading, direct blitter clear
+and line drawing, and synchronized double buffering. ESC during animation,
+F5 replay and resource cleanup are covered by the ADF regression. See
+[the cube checkpoint](MIGA-80-cube-animation.md). Physical A1200 feedback remains pending.
+
 The pinned Musashi runner foundation and compiler connection are implemented.
 One explicitly typed `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`string`/`symbol`
 function with typed local declarations, assignments, signed/unsigned

@@ -20,6 +20,11 @@ with CPU Bresenham and C2P; `layer(PLANAR)` selects PF2/back with direct blitter
 line mode. The ADF includes `DATA/LAYERS.LUA`. See
 [drawing primitives and tests](documentation/MIGA-80-drawing-primitives.md).
 
+The Lua wireframe cube adds fixed-point `sin`/`cos`, `cls`, `flip` and `time`,
+with direct blitter drawing, synchronized double buffering and a ten-second
+animation. Build its autoboot disk with `gmake miga80-cube-adf`; see
+[cube animation and runtime](documentation/MIGA-80-cube-animation.md).
+
 Run only the portable three-layer graphics oracle natively with:
 
 ```sh
@@ -63,7 +68,8 @@ comparisons (`!=` aliases `~=`), nested `if`/`then`/`else`/`end`, and nested
 `while`/`do`/`end` loops with loop-carried values, `break`, and `continue`.
 It also accepts an explicit `void` result and the statement-only
 `pset(i32, i32, u8)`, `layer(PLANAR/PIXEL)`, and
-`line(i32, i32, i32, i32, u8)` runtime intrinsics used by the vertical slice.
+`line(i32, i32, i32, i32, u8)`, `cls(u8)` and `flip()` runtime intrinsics.
+`sin(fix)`, `cos(fix)` and `time()` return `fix` values.
 Signed integer `/` truncates toward zero, unsigned integer `/` uses `DIVU.L`, and
 statement-only `/=` follows the target numeric type; all use controlled
 division-by-zero faults. Narrow arithmetic wraps at its declared width and is

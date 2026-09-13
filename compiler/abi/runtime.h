@@ -18,7 +18,12 @@
 #define MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET 40
 #define MIGA80_ABI_RUNTIME_LINE_END_HANDLER_OFFSET 44
 #define MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET 48
-#define MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE 52
+#define MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE 72
+#define MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET 52
+#define MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET 56
+#define MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET 60
+#define MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET 64
+#define MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET 68
 #define MIGA80_LAYER_PLANAR 0
 #define MIGA80_LAYER_PIXEL 1
 #define MIGA80_ABI_FAULT_DIVISION_BY_ZERO 1
@@ -49,6 +54,7 @@ struct miga80_drawing_context {
     uint32_t line_start_handler;
     uint32_t line_end_handler;
     uint32_t drawing_state;
+    uint32_t sin_handler, cos_handler, time_handler, cls_handler, flip_handler;
 };
 #endif
 #endif

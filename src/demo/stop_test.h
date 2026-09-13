@@ -5,7 +5,7 @@
 
 struct miga80_stop_injector;
 struct miga80_stop_injector *miga80_stop_injector_start(
-    struct miga80_supervisor_events *events);
+    struct miga80_supervisor_events *events, ULONG delay_micros);
 int miga80_stop_injector_finish(struct miga80_stop_injector *injector,
                                int expect_escape);
 

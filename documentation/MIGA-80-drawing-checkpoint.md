@@ -4,6 +4,10 @@ Mise à jour : 13 septembre 2026, après reprise de la pause avant extinction.
 Les modifications sont enregistrées dans le workspace, sans commit.
 Cette étape est terminée et l’ADF reconstruit est validé sous FS-UAE.
 
+L’étape suivante est maintenant réalisée : [cube Lua animé, trigo fixe et
+double buffer](MIGA-80-cube-animation.md). Ce document conserve le bilan de
+l’étape de dessin précédente ; le lien ci-dessus donne le point de reprise actuel.
+
 ## Implémentation
 
 - `layer(PLANAR)` / `layer(PIXEL)`, `pset` et

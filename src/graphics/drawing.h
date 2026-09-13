@@ -16,15 +16,22 @@ struct miga80_draw_line {
 
 struct miga80_draw_surface {
     uint32_t layer; /* Offset zero is used by the native pset fast path. */
+    uint32_t pixel_written; /* Native PIXEL pset writes offset four. */
     uint8_t *pixels;
     uint8_t *planes[4];
     int32_t line_x0, line_y0;
     uint32_t line_color;
     void (*planar_line)(void *owner, const struct miga80_draw_line *line);
     void (*planar_pset)(void *owner, uint32_t x, uint32_t y, uint32_t color);
+    void (*clear)(void *owner, uint32_t color);
+    void (*flip)(void *owner);
+    uint32_t (*time)(void *owner);
     void *owner;
 };
 
+void miga80_draw_clear(struct miga80_draw_surface *surface, uint32_t color);
+void miga80_draw_flip(struct miga80_draw_surface *surface);
+uint32_t miga80_draw_time(struct miga80_draw_surface *surface);
 int miga80_draw_clip_line(struct miga80_draw_line *line);
 void miga80_draw_select(struct miga80_draw_surface *surface, uint32_t layer);
 void miga80_draw_pset(struct miga80_draw_surface *surface,

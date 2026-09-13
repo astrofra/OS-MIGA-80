@@ -35,8 +35,11 @@ if-statement = "if", expression, "then", { control-statement },
                "else", { control-statement }, "end" ;
 while-statement = "while", expression, "do", { control-statement }, "end" ;
 loop-control-statement = "break" | "continue" ;
-intrinsic-call = "pset", "(", expression, ",", expression, ",",
-                 expression, ")" ;
+intrinsic-call = "pset", "(", expression, ",", expression, ",", expression, ")"
+               | "line", "(", expression, ",", expression, ",", expression,
+                 ",", expression, ",", expression, ")"
+               | "layer", "(", ( "PLANAR" | "PIXEL" ), ")"
+               | "cls", "(", expression, ")" | "flip", "(", ")" ;
 return-statement = "return", expression ;
 expression = sum, { ( "==" | "~=" | "!=" | "<" | "<=" | ">" | ">=" ), sum } ;
 sum        = product, { ( "+" | "-" ), product } ;
@@ -45,6 +48,7 @@ unary      = "-", unary | primary ;
 primary    = integer | fix-literal | "true" | "false" | string-literal
              | "symbol", "(", string-literal, ")"
              | ( "fix" | "i32" ), "(", expression, ")"
+             | ( "sin" | "cos" ), "(", expression, ")" | "time", "(", ")"
              | parameter-name | local-name | "(", expression, ")" ;
 string-literal = single-quoted-string | double-quoted-string ;
 fix-literal = digits, ".", digit, { digit } ;
@@ -62,7 +66,7 @@ source expression can obtain that wrapping bit pattern through arithmetic.
 Short string literals use
 single or double quotes and accept `\\`, `\'`, `\"`, `\n`, `\r`, `\t`,
 `\0`, and `\xNN`; raw newlines are rejected. A function has at most 16
-function-scoped typed locals and 32 statements including nested branches and
+function-scoped typed locals and 80 statements (384 AST nodes) including nested branches and
 the final return.
 Semicolons are optional statement separators. A non-`void` function requires
 its final return; a `void` function reaches `end` without a value.
@@ -123,8 +127,10 @@ pool merging and ID rewriting remain part of the future multi-function
 pack/link step. There are no `byte` or `word` aliases: the source spellings
 remain `i8`, `u8`, `i16`, and `u16`.
 
-Calls are currently limited to statement-only `pset(i32, i32, u8)`, resolved
-statically to the trusted runtime service. Explicit conversions involving the
+Calls are limited to statically resolved runtime services: `pset(i32,i32,u8)`,
+`layer(PLANAR/PIXEL)`, `line(i32,i32,i32,i32,u8)`, `cls(u8)` and `flip()` as
+statements; `sin(fix)`, `cos(fix)` and `time()` return `fix`. See
+[animation](MIGA-80-cube-animation.md) for units and synchronization. Explicit conversions involving the
 narrow integer types, ordinary user calls, multiple functions, multiple
 returns, hexadecimal source literals, and the minimum `i32` literal spelling
 are likewise rejected rather than guessed.
@@ -206,8 +212,10 @@ The implementation has four bounded, host-buildable layers:
 For the current local toolchain, GNU `m68k-amigaos-as` retains a relocatable
 Amiga object and `m68k-amigaos-objcopy` extracts the flat image consumed by
 Musashi. The shipping direct encoder now covers O0 stack IR and the O1 numeric
-plus `pset` value-IR subset used by the Mandelbrot ADF; its O1 bytes match the
-GNU route exactly. ELF linking, symbol-manifest loading, a fully shared
+and graphics value-IR subset used by Mandelbrot and the animated cube. Direct
+O1 also supports integer/fixed division and fixed/integer conversion. Mandelbrot
+retains byte-identical O1 output; the new numeric fault stubs are inline in the
+direct encoder and use cold tails in GNU output, with equivalent native results. ELF linking, symbol-manifest loading, a fully shared
 low-level instruction model, and broader O1 direct coverage remain later
 steps. The `-O0`
 stack-heavy renderer remains a correctness oracle; see the [MIGA Lua Optimization

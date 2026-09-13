@@ -67,8 +67,9 @@ bits. `BLTSIZE` starts each plane operation last. The algorithm follows the
 
 DMA and blitter priority are enabled for the batch; only the bits changed by
 this batch are restored afterward. Every DMA write finishes before
-`DisownBlitter` and `Permit`. Each clipped command touches at most 256 pixels
-per plane. This is a bounded suspension of OS task switching. Interrupts and
+`DisownBlitter` and `Permit`. Each clipped line touches at most 256 pixels
+per plane. The animation extension also queues full-plane clears (8,192
+bytes per plane), within the same limit of 16 commands per batch. This is a bounded suspension of OS task switching. Interrupts and
 the display remain active, allowing keyboard/timer delivery; it does not yet
 implement a whole-program exclusive takeover with a private input interrupt.
 
@@ -85,12 +86,12 @@ stops or returns to source. No physical latency/performance figure is claimed.
 IR retains one line call; value IR lowers it to two ordered effects:
 `line_start(x0,y0,color)` and `line_end(x1,y1)`. Both obey the existing maximum
 three-register native call ABI. Values needed after either call survive
-`D0-D2/A0-A1` clobbers. The optional drawing context is 52 bytes, retaining all
+`D0-D2/A0-A1` clobbers. The optional drawing context is 72 bytes, retaining all
 36 guarded-profile bytes at their existing offsets. See the
 [native ABI](MIGA-Lua-native-ABI-v0.md) for the added service entries.
 
 The guarded stack bound adds 1,024 bytes for the trusted C drawing path when a
-program contains a live layer/line call. Mandelbrot keeps its 96-byte bound,
+program contains a live non-pset runtime call. Mandelbrot keeps its 96-byte bound,
 464-byte guarded code image, and `c4604fc7` pixel checksum.
 
 ```sh
@@ -132,3 +133,7 @@ requires that hardware lines have actually executed before interruption.
 Reports: `build/reports/drawing-host.txt`,
 `build/reports/source-view-adf-graphics-fs-uae.txt`, and
 `build/reports/source-view-adf-stop-fs-uae.txt`.
+
+The animation extension adds `cls`, `flip`, `time`, `sin` and `cos`, with two
+complete AGA buffers. See [the Lua cube](MIGA-80-cube-animation.md) for publication
+and buffer-content semantics.

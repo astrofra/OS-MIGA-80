@@ -1306,10 +1306,32 @@ static int require_matching_numeric(struct parser *parser, int *left,
     return 1;
 }
 
+static int current_identifier_is(const struct parser *parser, const char *name);
+
 static int parse_primary(struct parser *parser)
 {
     const struct token token = parser->current;
 
+    if (current_identifier_is(parser, "sin") ||
+        current_identifier_is(parser, "cos") ||
+        current_identifier_is(parser, "time")) {
+        const int clock = current_identifier_is(parser, "time");
+        const enum miga80_ast_kind kind = clock ? MIGA80_AST_TIME :
+            current_identifier_is(parser, "sin") ? MIGA80_AST_SIN : MIGA80_AST_COS;
+        int operand = MIGA80_INVALID_NODE;
+        parser_advance(parser);
+        if (!expect(parser, TOKEN_LEFT_PAREN)) { return MIGA80_INVALID_NODE; }
+        if (!clock) {
+            operand = parse_expression(parser);
+            if (!require_type(parser, &operand, MIGA80_TYPE_FIX,
+                              token.line, token.column, "trigonometric argument")) {
+                return MIGA80_INVALID_NODE;
+            }
+        }
+        if (!expect(parser, TOKEN_RIGHT_PAREN)) { return MIGA80_INVALID_NODE; }
+        return add_node(parser, kind, token.line, token.column, operand,
+                        MIGA80_INVALID_NODE, 0U, 0U, MIGA80_TYPE_FIX);
+    }
     if (token.kind == TOKEN_FIX || token.kind == TOKEN_I32) {
         const enum miga80_type target_type =
             token.kind == TOKEN_FIX ? MIGA80_TYPE_FIX : MIGA80_TYPE_I32;
@@ -1933,8 +1955,11 @@ static unsigned int parse_graphics_statement(struct parser *parser)
     const struct token call = parser->current;
     const int is_layer = current_identifier_is(parser, "layer");
     const int is_line = current_identifier_is(parser, "line");
-    const unsigned int count = is_layer ? 1U : is_line ? 5U : 3U;
-    const enum miga80_ast_statement_kind kind = is_layer
+    const int is_cls = current_identifier_is(parser, "cls");
+    const int is_flip = current_identifier_is(parser, "flip");
+    const unsigned int count = is_flip ? 0U : is_cls || is_layer ? 1U : is_line ? 5U : 3U;
+    const enum miga80_ast_statement_kind kind = is_flip ? MIGA80_AST_CALL_FLIP :
+        is_cls ? MIGA80_AST_CALL_CLS : is_layer
         ? MIGA80_AST_CALL_LAYER : is_line ? MIGA80_AST_CALL_LINE
                                         : MIGA80_AST_CALL_PSET;
     unsigned int statement_index;
@@ -2036,7 +2061,9 @@ static int parse_control_statement_list(struct parser *parser,
             statement = parse_loop_control_statement(parser);
         } else if (current_identifier_is(parser, "pset") ||
                    current_identifier_is(parser, "layer") ||
-                   current_identifier_is(parser, "line")) {
+                   current_identifier_is(parser, "line") ||
+                   current_identifier_is(parser, "cls") ||
+                   current_identifier_is(parser, "flip")) {
             statement = parse_graphics_statement(parser);
         } else {
             statement = parse_assignment(parser);
@@ -2213,7 +2240,9 @@ int miga80_parse_function(const char *source, size_t source_size,
             statement = parse_loop_control_statement(&parser);
         } else if (current_identifier_is(&parser, "pset") ||
                    current_identifier_is(&parser, "layer") ||
-                   current_identifier_is(&parser, "line")) {
+                   current_identifier_is(&parser, "line") ||
+                   current_identifier_is(&parser, "cls") ||
+                   current_identifier_is(&parser, "flip")) {
             statement = parse_graphics_statement(&parser);
         } else {
             statement = parse_assignment(&parser);

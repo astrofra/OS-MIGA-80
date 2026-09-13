@@ -221,6 +221,21 @@ static int emit_instruction(
     case MIGA80_IR_GT_U32:
     case MIGA80_IR_GE_U32:
         return emit_binary(encoder, instruction);
+    case MIGA80_IR_CALL_SIN:
+    case MIGA80_IR_CALL_COS:
+    case MIGA80_IR_CALL_TIME:
+    case MIGA80_IR_CALL_CLS:
+    case MIGA80_IR_CALL_FLIP:
+        {
+        const enum miga80_ir_opcode op = instruction->opcode;
+        const unsigned int offset = op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
+        return ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP) || emit_u16(encoder, 0x201fU)) &&
+            emit_u16(encoder, 0x206dU) && emit_u16(encoder, (uint16_t)offset) && emit_u16(encoder, 0x4e90U) &&
+            ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP) || emit_u16(encoder, 0x2f00U));
+        }
     case MIGA80_IR_CALL_LAYER:
         return emit_u16(encoder, UINT16_C(0x201f)) &&
                emit_u16(encoder, UINT16_C(0x206d)) &&
@@ -741,6 +756,37 @@ static int o1_emit_runtime_call(struct encoder *encoder,
            emit_u16(encoder, UINT16_C(0x4e90));
 }
 
+/* Inline fault exits preserve every live register on the successful path. */
+static int o1_math_fault(struct encoder *encoder,
+    const struct miga80_value_instruction *value, unsigned int code, uint16_t skip)
+{
+    const unsigned int length = 6U + (value->line <= 127U ? 2U : 6U) +
+                                      (value->column <= 127U ? 2U : 6U);
+    return emit_u16(encoder, (uint16_t)(skip | length)) &&
+        emit_u16(encoder, (uint16_t)(0x7000U | code)) &&
+        (value->line <= 127U ? emit_u16(encoder, (uint16_t)(0x7200U | value->line)) :
+            emit_word_long(encoder, 0x223cU, value->line)) &&
+        (value->column <= 127U ? emit_u16(encoder, (uint16_t)(0x7400U | value->column)) :
+            emit_word_long(encoder, 0x243cU, value->column)) &&
+        emit_u16(encoder, 0x2055U) && emit_u16(encoder, 0x4ed0U);
+}
+
+static int o1_emit_divisor(struct encoder *encoder,
+    const struct miga80_value_function *function, const struct allocation_plan *plan,
+    unsigned int source, uint16_t extension)
+{
+    if (function->values[source].opcode == MIGA80_VALUE_CONSTANT) {
+        return emit_u16(encoder, 0x4c7cU) && emit_u16(encoder, extension) &&
+            emit_u32(encoder, function->values[source].immediate);
+    }
+    if (plan->registers[source] != MIGA80_NO_REGISTER) {
+        return emit_u16(encoder, (uint16_t)(0x4c40U | plan->registers[source])) &&
+            emit_u16(encoder, extension);
+    }
+    return emit_u16(encoder, 0x4c6eU) && emit_u16(encoder, extension) &&
+        emit_u16(encoder, o1_frame_displacement(o1_spill_offset(plan, source)));
+}
+
 static int o1_emit_value(struct encoder *encoder,
                          const struct miga80_value_function *function,
                          const struct allocation_plan *plan,
@@ -753,8 +799,11 @@ static int o1_emit_value(struct encoder *encoder,
     unsigned int source = value->right;
     int emitted;
 
-    if (miga80_value_call_arguments(value->opcode) != 0U) {
-        return o1_emit_runtime_call(encoder, function, plan, value);
+    if (miga80_value_is_call(value->opcode)) {
+        emitted = o1_emit_runtime_call(encoder, function, plan, value);
+        if (value->type == MIGA80_TYPE_VOID) { return emitted; }
+        return emitted && emit_u16(encoder, (uint16_t)(0x2000U | ((unsigned int)destination << 9))) &&
+            o1_store_spilled_result(encoder, plan, index, destination);
     }
     if (value->opcode == MIGA80_VALUE_NEG) {
         emitted = o1_emit_move(encoder, function, plan, value->left,
@@ -801,13 +850,65 @@ static int o1_emit_value(struct encoder *encoder,
                o1_store_spilled_result(encoder, plan, index,
                                        fix_destination);
     }
-    if (value->opcode == MIGA80_VALUE_DIV_FIX ||
-        value->opcode == MIGA80_VALUE_DIV ||
-        value->opcode == MIGA80_VALUE_DIV_U ||
-        value->opcode == MIGA80_VALUE_FIX_FROM_I32 ||
-        value->opcode == MIGA80_VALUE_I32_FROM_FIX) {
-        return o1_fail(encoder, value,
-                       "instruction is outside the direct O1 subset");
+    if (value->opcode == MIGA80_VALUE_FIX_FROM_I32) {
+        if (!o1_emit_move(encoder, function, plan, value->left, destination)) { return 0; }
+        if (function->values[value->left].opcode != MIGA80_VALUE_I32_FROM_FIX &&
+            (!o1_emit_add_immediate(encoder, 0x8000U, destination) ||
+             !emit_word_long(encoder, (uint16_t)(0x0c80U | destination), 0x10000U) ||
+             !o1_math_fault(encoder, value, MIGA80_ABI_FAULT_CONVERSION_OUT_OF_RANGE, 0x6500U) ||
+             !o1_emit_sub_immediate(encoder, 0x8000U, destination))) { return 0; }
+        return emit_u16(encoder, (uint16_t)(0x4840U | destination)) &&
+            emit_u16(encoder, (uint16_t)(0x4240U | destination)) &&
+            o1_store_spilled_result(encoder, plan, index, destination);
+    }
+    if (value->opcode == MIGA80_VALUE_I32_FROM_FIX) {
+        return o1_emit_move(encoder, function, plan, value->left, destination) &&
+            emit_u16(encoder, (uint16_t)(0x4a80U | destination)) && emit_u16(encoder, 0x6a06U) &&
+            o1_emit_add_immediate(encoder, 0xffffU, destination) &&
+            emit_u16(encoder, (uint16_t)(0x4840U | destination)) &&
+            emit_u16(encoder, (uint16_t)(0x48c0U | destination)) &&
+            o1_store_spilled_result(encoder, plan, index, destination);
+    }
+    if (value->opcode == MIGA80_VALUE_DIV_FIX) {
+        const unsigned int dest = plan->registers[index] != MIGA80_NO_REGISTER
+            ? (unsigned int)plan->registers[index] : 5U;
+        const uint16_t move_dest = (uint16_t)(0x2000U | (dest << 9));
+        return o1_emit_move(encoder, function, plan, value->right, 6) &&
+            o1_emit_move(encoder, function, plan, value->left, (int)dest) &&
+            emit_u16(encoder, 0x4a86U) &&
+            o1_math_fault(encoder, value, MIGA80_ABI_FAULT_DIVISION_BY_ZERO, 0x6600U) &&
+            emit_u16(encoder, (uint16_t)(0x2e00U | dest)) && /* move.l dest,d7 */
+            emit_u16(encoder, 0xbd87U) && emit_u16(encoder, 0x2f07U) && /* sign on stack */
+            emit_u16(encoder, (uint16_t)(0x4a80U | dest)) && emit_u16(encoder, 0x6a02U) &&
+            emit_u16(encoder, (uint16_t)(0x4480U | dest)) &&
+            emit_u16(encoder, 0x4a86U) && emit_u16(encoder, 0x6a02U) && emit_u16(encoder, 0x4486U) &&
+            emit_u16(encoder, (uint16_t)(0x2e00U | dest)) &&
+            emit_u16(encoder, 0xe08fU) && emit_u16(encoder, 0xe08fU) &&
+            emit_u16(encoder, (uint16_t)(0x4840U | dest)) &&
+            emit_u16(encoder, (uint16_t)(0x4240U | dest)) &&
+            emit_u16(encoder, (uint16_t)(0x2f00U | dest)) &&
+            emit_u16(encoder, (uint16_t)(move_dest | 7U)) && emit_u16(encoder, 0x7e00U) &&
+            emit_u16(encoder, 0x4c46U) && emit_u16(encoder, (uint16_t)((dest << 12) | 7U)) &&
+            emit_u16(encoder, (uint16_t)(move_dest | 0x1fU)) &&
+            emit_u16(encoder, 0x4c46U) && emit_u16(encoder, (uint16_t)((dest << 12) | 0x407U)) &&
+            emit_u16(encoder, 0x2e1fU) && emit_u16(encoder, 0x4a87U) && emit_u16(encoder, 0x6a02U) &&
+            emit_u16(encoder, (uint16_t)(0x4480U | dest)) &&
+            o1_store_spilled_result(encoder, plan, index, (int)dest);
+    }
+    if (value->opcode == MIGA80_VALUE_DIV || value->opcode == MIGA80_VALUE_DIV_U) {
+        if (!o1_emit_move(encoder, function, plan, value->left, destination)) { return 0; }
+        if (function->values[source].opcode != MIGA80_VALUE_CONSTANT) {
+            if (!(plan->registers[source] != MIGA80_NO_REGISTER ?
+                emit_u16(encoder, (uint16_t)(0x4a80U | plan->registers[source])) :
+                emit_u16(encoder, 0x4aaeU) && emit_u16(encoder,
+                    o1_frame_displacement(o1_spill_offset(plan, source)))) ||
+                !o1_math_fault(encoder, value, MIGA80_ABI_FAULT_DIVISION_BY_ZERO, 0x6600U)) { return 0; }
+        }
+        return o1_emit_divisor(encoder, function, plan, source, (uint16_t)(
+            ((unsigned int)destination << 12) | (unsigned int)destination |
+            (value->opcode == MIGA80_VALUE_DIV ? 0x800U : 0U))) &&
+            o1_emit_normalize(encoder, value->type, destination) &&
+            o1_store_spilled_result(encoder, plan, index, destination);
     }
 
     if (o1_opcode_is_commutative(value->opcode) &&
@@ -1427,7 +1528,7 @@ static int encode_m68k_o1(uint8_t *bytes, size_t capacity,
          * pset-only programs retain the original assembly fast-path bound. */
         for (reg = 0U; reg < function->value_count; ++reg) {
             if (function->values[reg].live &&
-                miga80_value_call_arguments(function->values[reg].opcode) != 0U &&
+                miga80_value_is_call(function->values[reg].opcode) &&
                 function->values[reg].opcode != MIGA80_VALUE_CALL_PSET) {
                 *required_stack_bytes += 1024U;
                 break;

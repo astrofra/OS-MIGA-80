@@ -81,7 +81,7 @@ static int service_timer(void *data, ULONG signals)
 }
 
 struct miga80_stop_injector *miga80_stop_injector_start(
-    struct miga80_supervisor_events *events)
+    struct miga80_supervisor_events *events, ULONG delay_micros)
 {
     struct miga80_stop_injector *injector =
         AllocMem(sizeof(*injector), MEMF_PUBLIC | MEMF_CLEAR);
@@ -112,7 +112,7 @@ struct miga80_stop_injector *miga80_stop_injector_start(
     events->signals = 1UL << injector->timer_port->mp_SigBit;
     events->service = service_timer;
     events->data = injector;
-    arm_timer(injector, 100000U);
+    arm_timer(injector, delay_micros);
     return injector;
 
 fail:
