@@ -21,6 +21,6 @@ native_execution=pass
 runtime_stack_guards=pass
 runtime_fault=0
 execution_budget_remaining=839712
-supervision=exec-task
+supervision=disabled
 compiler_stack_restore=pass
 result=pass

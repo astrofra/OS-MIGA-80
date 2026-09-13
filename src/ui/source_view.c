@@ -14,7 +14,7 @@ enum {
 };
 
 static const char view_title[] = "MIGA-80 / DEFAULT.LUA / READ ONLY";
-static const char view_status[] = "SOURCE READY - F5 RUN - ESC EXIT";
+static const char view_status[] = "SOURCE READY - F5 RUN - CTRL-Q EXIT";
 
 uint32_t miga80_source_view_checksum(const void *bytes, size_t size)
 {

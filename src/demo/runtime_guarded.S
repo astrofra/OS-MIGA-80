@@ -41,6 +41,11 @@ _miga80_runtime_test_fault:
         moveq   #3,%d2
         bra.s   _miga80_runtime_fault
 
+        /* STOPTEST only: a resource-free runtime call with no return or poll. */
+        .globl  _miga80_runtime_test_stall
+_miga80_runtime_test_stall:
+        bra.s   _miga80_runtime_test_stall
+
         .globl  _miga80_runtime_pset
 _miga80_runtime_pset:
         cmp.l   #256,%d0

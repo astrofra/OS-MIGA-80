@@ -426,7 +426,8 @@ COMPILER_CALL_ENCODER_EXPECTED := \
 COMPILER_CALL_MUSASHI_EXPECTED := \
 	tests/execute/call-survival.expected
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
-MIGA80_DEMO_SOURCE := src/demo/main.c
+MIGA80_DEMO_SOURCE := src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c
+MIGA80_DEMO_HEADERS := src/demo/supervisor.h src/demo/stop_test.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S
 MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \
 	$(COMPILER_FRONTEND_SOURCE) $(COMPILER_IR_SOURCE) \
@@ -662,9 +663,20 @@ miga80-demo-adf-fs-uae-workflow: $(MIGA80_DEMO_ADF)
 		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
 		tests/smoke/source-view-adf/workflow-expected.txt SELFTEST
 
+.PHONY: miga80-demo-adf-fs-uae-stop miga80-demo-adf-fs-uae-direct
+miga80-demo-adf-fs-uae-stop: $(MIGA80_DEMO_ADF)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=480 \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
+		tests/smoke/source-view-adf/stop-expected.txt STOPTEST
+
+miga80-demo-adf-fs-uae-direct: $(MIGA80_DEMO_ADF)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=180 \
+		$(MIGA80_DEMO_ADF_TESTER) $(MIGA80_DEMO_ADF) \
+		tests/smoke/source-view-adf/direct-expected.txt AUTORUN_DIRECT
+
 miga80-demo: $(MIGA80_DEMO_PROGRAM)
 
-$(MIGA80_DEMO_PROGRAM): $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
+$(MIGA80_DEMO_PROGRAM): $(MIGA80_DEMO_SOURCE) $(MIGA80_DEMO_HEADERS) $(SOURCE_VIEW_SOURCE) \
 		$(MIGA80_DEMO_RUNTIME_SOURCE) $(MIGA80_DEMO_COMPILER_SOURCES) \
 		$(COMPILER_ABI_HEADER) $(COMPILER_FRONTEND_HEADER) \
 		$(COMPILER_IR_HEADER) $(COMPILER_VALUE_IR_HEADER) \

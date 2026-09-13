@@ -720,6 +720,15 @@ The following controls are mandatory:
 
 A compiler or native runtime defect can still corrupt the process and prevent restoration because there is no hardware sandbox. This residual risk MUST be documented, minimized through differential tests and fuzzing, and treated as more severe than an ordinary cartridge error.
 
+The hosted vertical subset implements backward-transfer budgets and a separate
+Exec task supervised by the shell. Escape can remove that resource-free task
+even in code without budget checks; it does not require a CPU supervisor-mode
+entry or a jump out of an interrupt handler. This development protection relies
+on enabled interrupts and scheduling. It does not satisfy the future exclusive
+runtime's asynchronous stop-flag requirement while rescheduling is forbidden.
+Adding worker-owned resources or OS calls requires revisiting its removal
+protocol. See [workflow robustness](MIGA-80-workflow-robustness.md).
+
 ### 10.11 Minimum fantasy API
 
 The 1.0 API MUST cover:
@@ -1324,7 +1333,14 @@ MIGA-80 1.0 is complete only when all of the following are true:
 backward transfers, checks a separate runtime stack, and restores the host
 state on controlled faults. Shared F5/Esc transitions have a repeated-cycle
 regression covering source errors, budget exhaustion, forced faults, and
-subsequent Mandelbrot runs. See [workflow robustness](MIGA-80-workflow-robustness.md).
+subsequent Mandelbrot runs. The default hosted supervisor now runs native code
+in a separate Exec task: Escape preemptively stops guarded and unguarded loops,
+including a deliberately stalled trusted service, and returns directly to
+source. Ctrl-Q closes the hosted workspace; Esc never exits it. Repeated
+input.device regressions check held-key handling, signal and
+memory release, and a successful Mandelbrot after ten stops. `NOSUPERVISOR`
+preserves direct execution for development comparisons.
+See [workflow robustness](MIGA-80-workflow-robustness.md).
 Physical A1200 feedback is still pending; this does not close the hardware
 performance or exclusive-runtime gates.
 

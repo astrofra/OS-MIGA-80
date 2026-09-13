@@ -1,7 +1,7 @@
 # MIGA-80 Mandelbrot Vertical Slice
 
-**Status:** Call-aware O1 F5 path and hosted workflow protections implemented;
-physical A1200 feedback and responsive execution interruption remain pending.
+**Status:** Call-aware O1 F5 path, hosted workflow protections, and preemptive
+Escape interruption implemented; physical A1200 feedback remains pending.
 See the [2026-09-12 robustness checkpoint](MIGA-80-workflow-robustness.md).
 
 **Date:** 2026-09-05
@@ -42,12 +42,13 @@ The production demo follows these visible states:
 | Boot | The ADF boots through Kickstart and AmigaDOS and starts `MIGA80` automatically. | Successful preflight opens the workspace. |
 | Source | A 256 x 256 MIGA-80 screen shows the complete default Mandelbrot source. | `F5` starts compilation. |
 | Compile | The status row reports lexing, lowering, optimization, encoding, and readiness without opening a CLI. | Success enters execution; failure enters the error state. |
-| Run | Generated 68020 code fills the configured `PIXEL` viewport and the result is published to the AGA screen. | Normal return leaves the result visible. |
+| Run | Generated 68020 code fills the configured `PIXEL` viewport and the result is published to the AGA screen. | Normal return leaves the result visible; `Esc` stops the supervised task and returns to source. |
 | Result | The Mandelbrot image and a compact completion status remain visible. | `Esc` returns to the source view. |
 | Error | A bounded diagnostic shows the first source line, column, and message. | `Esc` returns to the source view. |
 
-In the source state, `Esc` exits MIGA-80 and restores the previous AmigaOS
-display. The initial source view has no editing, cursor, selection, save,
+`Ctrl-Q` exits MIGA-80 from source, result, or error and restores the previous
+AmigaOS display. `Esc` never closes the application and does nothing in source.
+The initial source view has no editing, cursor, selection, save,
 horizontal scrolling, or vertical scrolling.
 
 The first ADF is an AmigaOS-hosted MIGA-80 environment. It is not a bare-metal
@@ -122,7 +123,7 @@ semantic and performance baseline.
 | Pixel conversion | Correct C and 68020 C2P4 paths exist for 160 x 128, 192 x 160, and 256 x 256. | Select the 160 x 128 byte-per-pixel path and publish the generated viewport safely in hosted mode. |
 | Compiler | The portable compiler implements typed locals, cyclic CFG, `void`, fixed arithmetic, observable `pset`, and call-aware `-O1`. | Extend direct O1 to division, conversions, immutable values, and future user calls. |
 | Assembly backend | GNU rendering and direct O0/O1 emission are validated by typed-IR and Musashi oracles. | Converge the remaining instruction families on a fully shared low-level model. |
-| Native execution | Musashi and FS-UAE check runtime calls, ABI preservation, direct execution, cache synchronization, budgets, forced faults, and repeated workflow recovery. | Add responsive stop polling and physical/long-duration validation. |
+| Native execution | Musashi and FS-UAE check runtime calls, ABI preservation, direct execution, cache synchronization, budgets, forced faults, repeated workflow recovery, and preemptive hosted Escape. | Add exclusive-mode stop checks and physical/long-duration validation. |
 | UI | The source, compile, run, result, and error states use the project 4 x 8 font. | Add actual editing and scrolling in a later slice. |
 
 ## 6. Read-Only Source View
@@ -414,10 +415,14 @@ The first target trampoline must:
 The shipped source is read-only and bounded. Guarded O1 now enforces a
 deterministic budget of 1,000,000 backward transfers on the emitted control
 flow, with source-located fault 3 on exhaustion. The same trampoline restores
-the host state after either a controlled fault or normal return. Responsive
-`Esc` interruption during a running generated function belongs to the later
-hosted/exclusive input-safe-point work; `Esc` is required in the result and
-error states for this slice.
+the host state after either a controlled fault or normal return. Hosted
+execution now runs in a separate resource-free Exec task by default. `Esc`
+removes that task and returns directly to source, without requiring a generated
+safe point; held-key repeats are ignored until release. `NOSUPERVISOR` retains
+the direct budget-guarded path for comparisons. Compilation is not cancellable.
+This relies on OS scheduling and interrupts and does not recover arbitrary CPU
+exceptions or system corruption. The exclusive runtime still needs its own
+input/stop protocol; see [workflow robustness](MIGA-80-workflow-robustness.md).
 
 ## 13. Build and ADF Layout
 
@@ -450,11 +455,11 @@ manifest records raw size, filesystem listing, and executable, source, font,
 and complete-ADF checksums. The payload must remain within the existing
 800 KiB planning budget.
 
-The application waits for `F5` or `Esc` after drawing the source. `F5` presents
+The application waits for `F5` or `Ctrl-Q` after drawing the source. `F5` presents
 parse, typed-IR lowering, and direct-encoding states, executes the generated
 function, and leaves its Mandelbrot output visible. `Esc` returns to the source
-from result/error and exits from the source state. An `AUTORUN` command-line
-argument exists only to let the FS-UAE harness exercise the same path without
+from result/error; `Ctrl-Q` exits using the active keyboard layout. An `AUTORUN`
+command-line argument exists only to let the FS-UAE harness exercise the same path without
 synthesizing host keyboard input.
 
 ### 13.1 Implemented source-view checkpoint
@@ -465,7 +470,8 @@ The 2026-09-05 Kickstart 3.0 FS-UAE run passes with:
   4,924 BSS bytes;
 - a 643-byte source file occupying exactly 30 rows with a 44-column maximum;
 - source FNV-1a checksum `6600f4de`;
-- canonical source-view framebuffer checksum `f05779cc`;
+- canonical source-view framebuffer checksum `f05779cc` (historical Esc-exit
+  footer; the current Ctrl-Q footer produces `d6686400`);
 - verified AGA dual-playfield palette bases, RGB round-trip, C2P output, and
   bitmap pixel readback;
 - 39 occupied OFS blocks, reported as 19 KiB including filesystem overhead.
@@ -582,7 +588,8 @@ The vertical slice is complete when:
 7. the target pixel checksum matches the typed-IR and Musashi oracle;
 8. a deliberately invalid source produces a bounded line/column diagnostic;
 9. a forced runtime fault and budget exhaustion restore the shell;
-10. `Esc` returns from result/error to source and exits cleanly from source;
+10. `Esc` stops hosted execution and returns from result/error to source without
+    exiting; `Ctrl-Q` closes cleanly from source, result, or error;
 11. repeated compile/run/return cycles show no incremental memory or resource
     leak under FS-UAE;
 12. the image and its manifest remain reproducible and within the floppy
@@ -608,8 +615,9 @@ physical-hardware release gates.
    state after budget and forced-service faults.
 4. **Implemented -- integrated Mandelbrot and hosted recovery:** byte-per-pixel
    rendering, one-shot publication, checksums, source/result/error states,
-   backward-edge budgets, separate runtime stack, forced-fault recovery, and
-   repeated-state automation. The protected shipping image is 464 bytes; the
+   backward-edge budgets, separate runtime stack, forced-fault recovery,
+   preemptive hosted Escape, and repeated-state automation. The protected
+   shipping image is 464 bytes; the
    404-byte figures in the September 5 checkpoint are the unguarded baseline.
 5. **Release proof:** automated FS-UAE boot, reproducible ADF/manifest, then
    timing and visual review on a stock PAL A1200.

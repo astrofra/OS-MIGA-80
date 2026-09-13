@@ -107,7 +107,7 @@ fault codes are shared with the assembly trampoline in `compiler/abi/runtime.h`:
 | `12` | Mutable unsigned backward-transfer budget |
 | `16` | Dedicated generated-stack top |
 | `20` | Saved host stack pointer, owned by the trampoline |
-| `24` | Last controlled fault code; zero on normal completion |
+| `24` | Last fault/stop code; zero on normal completion |
 | `28` | Fault source line |
 | `32` | Fault source column |
 
@@ -132,9 +132,12 @@ O0/O1 oracle images retain their original context requirements.
 
 The shipping vertical runtime enters generated code on a dedicated guarded
 4 KiB stack after checking the direct encoder's conservative stack requirement.
-The compiler uses its separate 32 KiB stack. Future user-call depth and
-responsive stop checks remain extensions; synthetic Musashi stack addresses
-are not ABI constants.
+The compiler uses its separate 32 KiB stack. Hosted supervision adds a 4 KiB
+worker C stack above the generated stack in one guarded allocation whose bounds
+are registered with Exec. Normal return and controlled faults restore the
+worker's C stack; asynchronous Escape removes the worker before the owner frees
+either stack. Future user-call depth and exclusive-mode stop checks remain
+extensions; synthetic Musashi stack addresses are not ABI constants.
 
 ## Calls and returns
 
@@ -173,6 +176,14 @@ The defined ABI 0.6 fault codes are:
 | `1` | Numeric division by zero |
 | `2` | Explicit numeric conversion out of range |
 | `3` | Execution budget exhausted (guarded profile) |
+| `4` | User stop, recorded by the hosted supervisor after removing its worker |
+
+Code 4 is an asynchronous execution outcome, not a generated fault-handler
+call. The owner records it in the guarded context with line and column zero;
+no source location is inferred from the interrupted PC. It abandons the worker
+stack rather than unwinding through the runtime trampoline. The UI returns
+directly to the source with `STOPPED`; context size and calling convention are
+unchanged. See [workflow robustness](MIGA-80-workflow-robustness.md).
 
 A function with a dynamic divisor tests it before the selected integer or
 fixed-point division sequence. Its cold fault site loads `D1` and `D2`, joins

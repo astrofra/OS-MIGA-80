@@ -148,6 +148,8 @@ gmake compiler-encoder-musashi-test
 gmake compiler-call-test runtime-guards-test
 gmake miga80-demo-adf-fs-uae-autorun
 gmake miga80-demo-adf-fs-uae-workflow
+gmake miga80-demo-adf-fs-uae-stop
+gmake miga80-demo-adf-fs-uae-direct
 ```
 
 This produces `build/distribution/miga80-source-view.adf`. The standalone OFS
@@ -166,12 +168,25 @@ compiler stack, and enters it with Exec `StackSwap`. This is independent of
 the boot Shell and of the stack assigned to a manual CLI launch. Generated
 code uses a separate guarded 4 KiB stack and a budget of 1,000,000 backward
 transfers. Budget exhaustion and controlled faults restore the host stack and
-return to the error/source workflow. The SELFTEST regression exercises repeated
-success, syntax-error, budget-fault, and forced-fault cycles; see
+return to the error/source workflow. Generated code runs in a separate Exec
+task by default: `Esc` stops execution and returns directly to the source,
+including when the code cannot reach a budget check. `Esc` never closes the
+application; use `Ctrl-Q` from the source, result, or error screen to quit.
+The shortcut follows the active AmigaOS keyboard layout. The SELFTEST
+regression exercises repeated success and error cycles; STOPTEST injects real
+keyboard events to stop guarded/unguarded loops and a stalled service. See
 [workflow robustness](documentation/MIGA-80-workflow-robustness.md).
 Interactive diagnostics are written to `RAM:MIGA80-BOOTED.TXT`, keeping the
 distribution ADF unchanged and preventing emulator save-disk overlays from
 outliving the disk layout they were created for.
+
+For development comparisons, a manual Shell launch can disable supervision:
+`MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA RAM:MIGA80-BOOTED.TXT NOSUPERVISOR`.
+The backward-transfer budget remains active. `SUPERVISOR` explicitly enables
+the default again; with an automated mode, put the option after that mode.
+The supervisor relies on working OS scheduling and interrupts. It cannot
+recover arbitrary memory corruption or replace the future exclusive-mode
+stop protocol. Physical A1200 validation is still pending.
 
 The unguarded 404-byte O1 baseline is byte-identical to its GNU-assembly
 oracle. Under Musashi it executes 7,466,958 instructions, versus 17,314,258 for the original

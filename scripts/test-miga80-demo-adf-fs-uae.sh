@@ -104,9 +104,14 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
-  AUTORUN|SELFTEST)
+  AUTORUN|SELFTEST|STOPTEST)
     printf '%s\n' \
       "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
+  AUTORUN_DIRECT)
+    printf '%s\n' \
+      'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT AUTORUN NOSUPERVISOR' \
       >"$MIGA80_TEST_STARTUP"
     ;;
   *)
@@ -145,14 +150,21 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
   /bin/cp "$MIGA80_RUN_ADF" "$MIGA80_SNAPSHOT_ADF"
   if xdftool "$MIGA80_SNAPSHOT_ADF" type BOOTED.TXT \
        >"$MIGA80_CANDIDATE_REPORT" 2>/dev/null; then
-    if [ "$MIGA80_MODE" = SELFTEST ]; then
+    if [ "$MIGA80_MODE" = STOPTEST ]; then
+      if /usr/bin/grep -q '^miga80_stop_report=1$' \
+           "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
+           /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
+    elif [ "$MIGA80_MODE" = SELFTEST ]; then
       if /usr/bin/grep -q '^miga80_workflow_report=1$' \
            "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
            /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
-    elif [ "$MIGA80_MODE" = AUTORUN ]; then
+    elif [ "$MIGA80_MODE" = AUTORUN ] || [ "$MIGA80_MODE" = AUTORUN_DIRECT ]; then
       if /usr/bin/grep -q '^miga80_source_view_report=2$' \
            "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
@@ -191,8 +203,20 @@ if [ "$MIGA80_MODE" = AUTORUN ]; then
   printf 'PASS  on-target source compilation and native execution completed\n'
 fi
 
+if [ "$MIGA80_MODE" = AUTORUN_DIRECT ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-direct-fs-uae.txt"
+  printf 'PASS  native execution with NOSUPERVISOR completed\n'
+fi
+
 if [ "$MIGA80_MODE" = SELFTEST ]; then
   /bin/cp "$MIGA80_REPORT" \
     "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-workflow-fs-uae.txt"
   printf 'PASS  repeated compile/run/fault/source cycles and cleanup completed\n'
+fi
+
+if [ "$MIGA80_MODE" = STOPTEST ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/source-view-adf-stop-fs-uae.txt"
+  printf 'PASS  input.device Escape stopped guarded, unguarded, and stalled code\n'
 fi
