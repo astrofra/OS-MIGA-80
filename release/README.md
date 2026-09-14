@@ -2,7 +2,11 @@
 
 [miga80.adf](miga80.adf) is the reference **development preview**, a bootable
 880 KiB OFS disk for a PAL Amiga 1200, 2 MiB Chip RAM, Kickstart 3.0/3.1.
-It opens a graphical file selector at `SYS:demos`.
+It shows the centered logo with a 3.2-second glitch intro and a procedural
+“A–MI–GA” jingle, then opens the graphical file selector at `SYS:demos`.
+The intro runs once per application launch, before the file workflow appears;
+F2, F5 and returns to the source do not replay it.
+ESC or a left click skips the intro; CTRL-Q exits.
 
 - `default.lua`: Mandelbrot fractal.
 - `layers.lua`: PIXEL and PLANAR drawing.
@@ -24,6 +28,7 @@ Rebuild and validate from the repository root:
 
 ```sh
 gmake release
+gmake release-intro-fs-uae
 gmake release-fs-uae
 ```
 

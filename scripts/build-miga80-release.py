@@ -61,7 +61,9 @@ def main():
         "adf_sha256": sha256(temporary),
         "filesystem": "OFS",
         "volume": "MIGA80",
-        "startup": "SYS:demos file selector",
+        "startup": "centered glitch logo + procedural jingle, then SYS:demos file selector",
+        "embedded_logo": {"source": "works/logo.png", "sha256": sha256(pathlib.Path("works/logo.png")),
+                          "width": 196, "height": 43},
         "runtime_report": "RAM:MIGA80-BOOTED.TXT",
         "files": {destination: {"source": str(source), "bytes": source.stat().st_size,
                                   "sha256": sha256(source)}

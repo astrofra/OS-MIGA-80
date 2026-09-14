@@ -425,11 +425,13 @@ COMPILER_CALL_ENCODER_EXPECTED := \
 	tests/host/compiler-encoder/call-survival.expected
 COMPILER_CALL_MUSASHI_EXPECTED := \
 	tests/execute/call-survival.expected
+BOOT_LOGO_HEADER := build/generated/boot_logo_data.h
+BOOT_JINGLE_OBJECT := build/amiga/source-view/boot_jingle.o
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
-MIGA80_DEMO_SOURCE := src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
+MIGA80_DEMO_SOURCE := src/demo/intro.c src/demo/intro_effect.c src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
 	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c \
 	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
-MIGA80_DEMO_HEADERS := src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
+MIGA80_DEMO_HEADERS := src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
 	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S \
 	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
@@ -706,7 +708,7 @@ miga80-demo-adf-fs-uae-graphics: $(MIGA80_DEMO_ADF)
 
 miga80-demo: $(MIGA80_DEMO_PROGRAM)
 
-$(MIGA80_DEMO_PROGRAM): $(DRAWING_TEST_HEADER) $(MIGA80_DEMO_SOURCE) $(MIGA80_DEMO_HEADERS) $(SOURCE_VIEW_SOURCE) \
+$(MIGA80_DEMO_PROGRAM): $(BOOT_LOGO_HEADER) $(BOOT_JINGLE_OBJECT) $(DRAWING_TEST_HEADER) $(MIGA80_DEMO_SOURCE) $(MIGA80_DEMO_HEADERS) $(SOURCE_VIEW_SOURCE) \
 		$(MIGA80_DEMO_RUNTIME_SOURCE) $(MIGA80_DEMO_COMPILER_SOURCES) \
 		$(COMPILER_ABI_HEADER) $(COMPILER_FRONTEND_HEADER) \
 		$(COMPILER_IR_HEADER) $(COMPILER_VALUE_IR_HEADER) \
@@ -720,7 +722,7 @@ $(MIGA80_DEMO_PROGRAM): $(DRAWING_TEST_HEADER) $(MIGA80_DEMO_SOURCE) $(MIGA80_DE
 		-I$(FONT4X8_GENERATED_DIR) \
 		$(TARGET_CFLAGS) $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
 		$(SOURCE_VIEW_PALETTE_SOURCE) $(C2P_REFERENCE_SOURCE) \
-		$(MIGA80_DEMO_COMPILER_SOURCES) $(MIGA80_DEMO_RUNTIME_SOURCE) \
+		$(MIGA80_DEMO_COMPILER_SOURCES) $(MIGA80_DEMO_RUNTIME_SOURCE) $(BOOT_JINGLE_OBJECT) \
 		-Wl,--gc-sections -Wl,-Map,$(MIGA80_DEMO_MAP) -o $@ $(TARGET_RUNTIME)
 
 miga80-demo-inspect: $(MIGA80_DEMO_PROGRAM)
@@ -1368,7 +1370,7 @@ exclusive-graphics-test-adf-fs-uae: $(EXCLUSIVE_GRAPHICS_TEST_ADF) \
 runtime-compare:
 	./scripts/compare-c-runtimes.sh
 
-check: c2p4-asm-test animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
+check: intro-test c2p4-asm-test animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
@@ -1479,3 +1481,30 @@ $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIG
 release-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \
 		tests/smoke/source-view-adf/browser-expected.txt BROWSERTEST
+
+$(BOOT_LOGO_HEADER): works/logo.png scripts/generate-boot-logo.py
+	$(PYTHON) scripts/generate-boot-logo.py $< $@
+
+$(BOOT_JINGLE_OBJECT): src/audio/boot_jingle.c src/audio/boot_jingle.h Makefile
+	@mkdir -p $(dir $@)
+	$(TARGET_CC) $(PROJECT_CPPFLAGS) $(TARGET_CFLAGS) -m68000 -c $< -o $@
+
+.PHONY: release-intro-fs-uae
+release-intro-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=120 $(MIGA80_DEMO_ADF_TESTER) $< \
+		tests/smoke/source-view-adf/intro-expected.txt INTROTEST
+
+INTRO_HOST_PROGRAM := $(HOST_BUILD_DIR)/intro/test
+.PHONY: intro-test
+$(INTRO_HOST_PROGRAM): tests/host/intro/main.c src/demo/intro_effect.c \
+        src/demo/intro_effect.h src/audio/boot_jingle.c src/audio/boot_jingle.h $(BOOT_LOGO_HEADER)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) -Ibuild/generated $(HOST_CFLAGS) \
+		-fsanitize=address,undefined tests/host/intro/main.c src/demo/intro_effect.c \
+		src/audio/boot_jingle.c -o $@
+
+intro-test: $(INTRO_HOST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)/intro
+	$(INTRO_HOST_PROGRAM) $(REPORT_DIR)/intro >$(REPORT_DIR)/intro-host.txt
+	$(PYTHON) scripts/preview-boot-intro.py $(REPORT_DIR)/intro >>$(REPORT_DIR)/intro-host.txt
+	@cat $(REPORT_DIR)/intro-host.txt

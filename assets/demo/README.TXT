@@ -2,7 +2,16 @@ MIGA-80 LUA GRAPHICS DEMOS - DEVELOPMENT PREVIEW
 
 Boot release/miga80.adf on a PAL Amiga 1200 with 2 MiB Chip RAM and
 Kickstart 3.0 or 3.1. No Fast RAM is required. This reference floppy opens
-the graphical file selector at SYS:demos. It includes all four Lua demos:
+the graphical file selector at SYS:demos after a 3.2-second logo intro.
+The centered logo appears and disappears through glitch bands, accompanied
+by three "A-MI-GA" chords (low, high, middle). The 68000 synthesizes the sound
+at startup; Paula plays it in stereo. No recorded music file is needed.
+The intro runs once per launch, before the selector or source view appears.
+Opening another file, F5 replay and ESC return never restart it.
+ESC or a left click skips the intro; CTRL-Q exits. NOSPLASH is available as
+a CLI option after the report path and optional BROWSE mode.
+
+The disk includes all four Lua demos:
 
   default.lua       Mandelbrot fractal, chunky pixels.
   layers.lua        Lines and pixels on both playfields.

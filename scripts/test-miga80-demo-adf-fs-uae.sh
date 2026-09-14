@@ -115,6 +115,11 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
+  INTROTEST)
+    printf '%s\n' \
+      'SYS:MIGA80 SYS:demos/default.lua SYS:BOOTED.TXT INTROTEST' \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
   BROWSERTEST)
     printf '%s\n' \
       'SYS:MIGA80 SYS:demos/default.lua SYS:BOOTED.TXT BROWSERTEST' \
@@ -182,6 +187,11 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
            "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" |
            /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
+    elif [ "$MIGA80_MODE" = INTROTEST ]; then
+      if /usr/bin/grep -q '^miga80_intro_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
     elif [ "$MIGA80_MODE" = BROWSERTEST ]; then
@@ -315,4 +325,10 @@ if [ "$MIGA80_MODE" = BROWSERTEST ]; then
   /bin/cp "$MIGA80_REPORT" \
     "$MIGA80_PROJECT_ROOT/build/reports/release-browser-fs-uae.txt"
   printf 'PASS  SYS: browser, mouse/keyboard loading, errors, execution and cleanup\n'
+fi
+
+if [ "$MIGA80_MODE" = INTROTEST ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/release-intro-fs-uae.txt"
+  printf 'PASS  logo intro, generated PCM on Paula, Escape, palette and resource cleanup\n'
 fi

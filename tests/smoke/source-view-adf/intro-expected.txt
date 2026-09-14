@@ -1,0 +1,14 @@
+miga80_intro_report=1
+pcm_checksum=5aee282e
+centered_logo_glitch=pass
+clock_duration=pass
+double_buffer=pass
+paula_dma_stereo=pass
+pcm_completed=pass
+repeat_no_growth=pass
+escape_input_device=pass
+quit_cleanup=pass
+audio_channels_released=pass
+source_palette_restore=pass
+hosted_cleanup=pass
+result=pass

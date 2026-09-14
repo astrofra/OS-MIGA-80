@@ -38,6 +38,7 @@
 #include "demo/supervisor.h"
 #include "demo/stop_test.h"
 #include "demo/file_picker.h"
+#include "demo/intro.h"
 #include "demo/drawing_host.h"
 #include "drawing_test_data.h"
 #include "ui/palette.h"
@@ -1188,6 +1189,34 @@ static int is_quit_key(UWORD code, UWORD qualifiers)
            translated[0] == 0x11; /* Ctrl-Q */
 }
 
+static const struct miga80_supervisor_events *intro_test_events;
+
+static int poll_intro_input(void *data)
+{
+    struct Window *window = data;
+    struct IntuiMessage *message;
+    if (intro_test_events != NULL &&
+        !intro_test_events->service(intro_test_events->data, intro_test_events->signals)) {
+        return MIGA80_INTRO_FAILED;
+    }
+    while ((message = (struct IntuiMessage *)GetMsg(window->UserPort)) != NULL) {
+        const ULONG kind = message->Class;
+        const UWORD code = message->Code, qualifiers = message->Qualifier;
+        ReplyMsg((struct Message *)message);
+        if (kind == IDCMP_RAWKEY) {
+            if (is_quit_key(code, qualifiers)) { return MIGA80_INTRO_QUIT; }
+            if (code == (DEMO_RAWKEY_ESCAPE | 0x80U)) { escape_held = 0; }
+            if (code == DEMO_RAWKEY_ESCAPE && (qualifiers & IEQUALIFIER_REPEAT) == 0U) {
+                escape_held = 1;
+                return MIGA80_INTRO_SKIPPED;
+            }
+        } else if (kind == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) {
+            return MIGA80_INTRO_SKIPPED;
+        }
+    }
+    return 0;
+}
+
 /* Shared by real raw-key input and the on-target workflow regression. */
 static int workflow_key(struct Screen *screen, uint8_t *chunky,
                          const struct Miga80SourceViewMetrics *metrics,
@@ -1325,6 +1354,15 @@ static int ui_event(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky,
     return 0;
 }
 
+static int write_browser_ready_report(const char *path)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int written;
+    if (output == (BPTR)0) { return 0; }
+    written = write_text(output, "miga80_startup_report=1\nbrowser=ready\nresult=pass\n");
+    return Close(output) && written;
+}
+
 static int run_event_loop(struct Window *window, struct Screen *screen,
     uint8_t *chunky, const struct Miga80SourceViewMetrics *metrics,
     const char *report_path, const char *source_path, int browse)
@@ -1340,7 +1378,7 @@ static int run_event_loop(struct Window *window, struct Screen *screen,
     ui.browsing = browse;
     if (browse) {
         (void)miga80_file_picker_scan(&ui.picker, ui.picker.path);
-        if (!ui_picker(&ui, screen, chunky)) { result = -1; }
+        if (!ui_picker(&ui, screen, chunky) || !write_browser_ready_report(report_path)) { result = -1; }
     } else {
         size_t pixel;
         /* Preserve the startup status, including autoboot compile errors. */
@@ -2004,6 +2042,91 @@ static int write_cube_report(const char *path, int success, int pixel)
     return Close(output) && written;
 }
 
+static struct miga80_intro_stats intro_sample;
+static const char *intro_failure;
+
+static int intro_quit_probe(void *data)
+{
+    unsigned int *polls = data;
+    return ++*polls >= 12U ? MIGA80_INTRO_QUIT : 0;
+}
+
+static int run_intro_regression(struct Screen *screen, uint8_t *chunky)
+{
+    struct BitMap *original = screen->RastPort.BitMap;
+    struct miga80_intro_stats stats;
+    struct miga80_supervisor_events events;
+    struct miga80_stop_injector *injector = NULL;
+    const ULONG signals = FindTask(NULL)->tc_SigAlloc;
+    ULONG baseline = 0U;
+    unsigned int round, polls = 0U;
+    int result, success = 0;
+    for (round = 0U; round < 2U; ++round) {
+        intro_failure = "intro_complete";
+        result = miga80_intro_run(screen, poll_intro_input, active_window, &stats);
+        if (result != MIGA80_INTRO_COMPLETE || stats.frames < 10U ||
+            stats.elapsed_q16 < 209715U || stats.elapsed_q16 > 235930U ||
+            screen->RastPort.BitMap != original) { goto done; }
+        intro_sample = stats;
+        intro_failure = "paula_pcm_playback";
+        if (stats.audio_mask == 0U || stats.audio_completed != 2U ||
+            stats.audio_errors != 0U || !stats.dma_seen || stats.pcm_checksum == 0U ||
+            !miga80_intro_audio_available()) { goto done; }
+        intro_failure = "intro_memory_growth";
+        if (round != 0U && AvailMem(MEMF_PUBLIC) < baseline) { goto done; }
+        baseline = AvailMem(MEMF_PUBLIC);
+    }
+    intro_failure = "intro_escape_setup";
+    injector = miga80_stop_injector_start(&events, 100000U);
+    if (injector == NULL) { goto done; }
+    intro_test_events = &events;
+    result = miga80_intro_run(screen, poll_intro_input, active_window, &stats);
+    intro_test_events = NULL;
+    intro_failure = "intro_escape";
+    success = miga80_stop_injector_finish(injector, 1);
+    injector = NULL;
+    if (!success || result != MIGA80_INTRO_SKIPPED || stats.audio_errors != 0U ||
+        screen->RastPort.BitMap != original || !miga80_intro_audio_available()) {
+        success = 0; goto done;
+    }
+    success = 0;
+    (void)poll_intro_input(active_window); /* Drain the injector's Escape release. */
+    escape_held = 0;
+    intro_failure = "intro_quit_cleanup";
+    if (miga80_intro_run(screen, intro_quit_probe, &polls, &stats) != MIGA80_INTRO_QUIT ||
+        screen->RastPort.BitMap != original || !miga80_intro_audio_available() ||
+        FindTask(NULL)->tc_SigAlloc != signals) { goto done; }
+    intro_failure = "intro_source_restore";
+    prepare_palette();
+    LoadRGB32(&screen->ViewPort, amiga_palette);
+    if (!show_source_status(screen, chunky, "SOURCE READY - F5 RUN - CTRL-Q EXIT") ||
+        !verify_source_view(screen, chunky) || !verify_palette(&screen->ViewPort)) { goto done; }
+    intro_failure = NULL;
+    success = 1;
+done:
+    intro_test_events = NULL;
+    if (injector != NULL) { (void)miga80_stop_injector_finish(injector, 0); }
+    return success;
+}
+
+static int write_intro_report(const char *path, int passed)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int written;
+    if (output == (BPTR)0) { return 0; }
+    written = write_text(output, "miga80_intro_report=1\n") &&
+        write_text(output, "pcm_checksum=") && write_hex32(output, intro_sample.pcm_checksum) &&
+        (passed ? write_text(output,
+            "\ncentered_logo_glitch=pass\nclock_duration=pass\ndouble_buffer=pass\n"
+            "paula_dma_stereo=pass\npcm_completed=pass\nrepeat_no_growth=pass\n"
+            "escape_input_device=pass\nquit_cleanup=pass\naudio_channels_released=pass\n"
+            "source_palette_restore=pass\nhosted_cleanup=pass\nresult=pass\n") :
+            (write_text(output, "\nfailure=") && write_text(output,
+                intro_failure != NULL ? intro_failure : "intro_setup_or_cleanup") &&
+             write_text(output, "\nresult=fail\n")));
+    return Close(output) && written;
+}
+
 int main(int argc, char **argv)
 {
     static struct TagItem video_control[] = {
@@ -2048,6 +2171,7 @@ int main(int argc, char **argv)
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
     const int browse = argc == 1 || (argc > 3 && strcmp(argv[3], "BROWSE") == 0);
+    const int introtest = argc > 3 && strcmp(argv[3], "INTROTEST") == 0;
     const int browsertest = argc > 3 && strcmp(argv[3], "BROWSERTEST") == 0;
     const int cubepixeltest = argc > 3 && strcmp(argv[3], "CUBEPIXELTEST") == 0;
     const int cubetest = cubepixeltest || (argc > 3 && strcmp(argv[3], "CUBETEST") == 0);
@@ -2066,9 +2190,13 @@ int main(int argc, char **argv)
     const char *failure = NULL;
     int success = 0;
     int argument;
+    int splash = !introtest && !browsertest && !cubetest && !selftest &&
+        !graphicstest && !stoptest && !(argc > 3 && strcmp(argv[3], "AUTORUN") == 0);
 
     for (argument = 3; argument < argc; ++argument) {
-        if (strcmp(argv[argument], "NOSUPERVISOR") == 0) {
+        if (strcmp(argv[argument], "NOSPLASH") == 0) {
+            splash = 0;
+        } else if (strcmp(argv[argument], "NOSUPERVISOR") == 0) {
             supervisor_enabled = 0;
         } else if (strcmp(argv[argument], "SUPERVISOR") == 0) {
             supervisor_enabled = 1;
@@ -2173,29 +2301,39 @@ int main(int argc, char **argv)
         failure = "source_palette_copper";
         goto cleanup;
     }
+    if (splash) {
+        struct miga80_intro_stats stats;
+        const int intro_result = miga80_intro_run(screen, poll_intro_input, window, &stats);
+        if (intro_result == MIGA80_INTRO_QUIT) { success = 1; goto cleanup; }
+        /* Allocation failure may skip the intro; it must not prevent opening files. */
+    }
     prepare_palette();
     LoadRGB32(&screen->ViewPort, amiga_palette);
     if (!verify_palette(&screen->ViewPort)) {
         failure = "source_palette_roundtrip";
         goto cleanup;
     }
-    if (!convert_source_view(screen, chunky)) {
-        failure = "source_view_c2p";
-        goto cleanup;
-    }
-    WaitTOF();
-    WaitTOF();
-    if (!verify_source_view(screen, chunky)) {
-        failure = "source_view_readback";
-        goto cleanup;
-    }
-    if (!write_success_report(report_path, &metrics)) {
-        failure = "write_boot_report";
-        goto cleanup;
+    if (!browse) {
+        if (!convert_source_view(screen, chunky)) {
+            failure = "source_view_c2p";
+            goto cleanup;
+        }
+        WaitTOF();
+        WaitTOF();
+        if (!verify_source_view(screen, chunky)) {
+            failure = "source_view_readback";
+            goto cleanup;
+        }
+        if (!write_success_report(report_path, &metrics)) {
+            failure = "write_boot_report";
+            goto cleanup;
+        }
     }
 
     success = 1;
-    if (browsertest) {
+    if (introtest) {
+        success = run_intro_regression(screen, chunky);
+    } else if (browsertest) {
         success = run_browser_regression(screen, chunky, &metrics);
     } else if (cubetest) {
         success = run_cube_regression(screen, chunky, &metrics, cubepixeltest);
@@ -2265,6 +2403,7 @@ cleanup:
     if (graphicstest && !write_graphics_report(report_path, success)) {
         success = 0;
     }
+    if (introtest && !write_intro_report(report_path, success)) { success = 0; }
     if (browsertest && !write_browser_report(report_path, success)) { success = 0; }
     if (cubetest && !write_cube_report(report_path, success, cubepixeltest)) { success = 0; }
     return success ? RETURN_OK : RETURN_FAIL;

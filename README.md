@@ -4,6 +4,9 @@ Fantasy OS for the Amiga 1200
 
 The reference distribution is [release/miga80.adf](release/miga80.adf), a
 bootable development preview containing all four Lua demos in `SYS:demos`.
+Startup shows the centered project logo with a brief glitch effect and an
+original “A–MI–GA” jingle synthesized on the 68000 and played through Paula.
+ESC skips the intro. See [boot intro and tests](documentation/MIGA-80-boot-intro.md).
 Its graphical selector supports mouse selection, double-click loading, folder
 navigation and pagination. F2 / **OPEN** reopens it, F5 runs the source, ESC
 stops or returns, and CTRL-Q exits. Build with `gmake release`; validate with

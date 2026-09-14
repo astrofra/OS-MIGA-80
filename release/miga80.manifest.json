@@ -3,16 +3,22 @@
   "edition": "development preview",
   "adf": "miga80.adf",
   "adf_bytes": 901120,
-  "adf_sha256": "e60fa778c663a26f30b272636ea381dc4b63e92c51234535cffb6959ea8b61ca",
+  "adf_sha256": "cce084f4f7e87d1336fa560666fb4116ae511fc0f65738f88b4294bbb82fb948",
   "filesystem": "OFS",
   "volume": "MIGA80",
-  "startup": "SYS:demos file selector",
+  "startup": "centered glitch logo + procedural jingle, then SYS:demos file selector",
+  "embedded_logo": {
+    "source": "works/logo.png",
+    "sha256": "d0bb25c7084531f6b6d9f20b9cd97c96d543a39bdc1f21587bce4a0f81fda881",
+    "width": 196,
+    "height": 43
+  },
   "runtime_report": "RAM:MIGA80-BOOTED.TXT",
   "files": {
     "MIGA80": {
       "source": "build/amiga/source-view/miga80",
-      "bytes": 124180,
-      "sha256": "891f42046cc6cb6b74a60307a19e9907fb28305fae239839379369d405bbccd6"
+      "bytes": 138036,
+      "sha256": "bfc019d9d94564407aec4bc9fd3781ad74a038a5b0f6e746b0c72753bbf5801e"
     },
     "S/Startup-Sequence": {
       "source": "assets/demo/Startup-Browser",
@@ -26,8 +32,8 @@
     },
     "README.TXT": {
       "source": "assets/demo/README.TXT",
-      "bytes": 4597,
-      "sha256": "9ae0e8b738b4e9c9f1a1cc93ceace28591c71c2df0b3c884de68e19229b18bfe"
+      "bytes": 5138,
+      "sha256": "d64e9e83e8937cf6adf5bbac8174838b77b3bce86a365bb7ded6fadc8139c660"
     },
     "LICENSE.TXT": {
       "source": "LICENSE",
@@ -61,22 +67,22 @@
     }
   },
   "filesystem_listing": [
-    "MIGA80                                           VOLUME  --------  14.09.2026 08:11:05.00  DOS0:ofs #512",
-    "  DATA                                              DIR  ----rwed  14.09.2026 08:11:05.00  ",
-    "    FONT4X8.BIN                                     780  ----rwed  14.09.2026 08:11:05.00  ",
-    "  demos                                             DIR  ----rwed  14.09.2026 08:11:05.00  ",
-    "    cube-chunky.lua                                 948  ----rwed  14.09.2026 08:11:05.00  ",
-    "    cube.lua                                        949  ----rwed  14.09.2026 08:11:05.00  ",
-    "    default.lua                                     643  ----rwed  14.09.2026 08:11:05.00  ",
-    "    layers.lua                                      406  ----rwed  14.09.2026 08:11:05.00  ",
-    "  KALMS.TXT                                        2470  ----rwed  14.09.2026 08:11:05.00  ",
-    "  LICENSE.TXT                                      1074  ----rwed  14.09.2026 08:11:05.00  ",
-    "  MIGA80                                         124180  ----rwed  14.09.2026 08:11:05.00  ",
-    "  README.TXT                                       4597  ----rwed  14.09.2026 08:11:05.00  ",
-    "  S                                                 DIR  ----rwed  14.09.2026 08:11:05.00  ",
-    "    Startup-Sequence                                 62  ----rwed  14.09.2026 08:11:05.00  ",
-    "sum:           301  150Ki        154112",
-    "data:          284  142Ki        145408  94.35%",
-    "fs:             17  8.5Ki          8704   5.65%"
+    "MIGA80                                           VOLUME  --------  14.09.2026 09:06:31.00  DOS0:ofs #512",
+    "  DATA                                              DIR  ----rwed  14.09.2026 09:06:31.00  ",
+    "    FONT4X8.BIN                                     780  ----rwed  14.09.2026 09:06:31.00  ",
+    "  demos                                             DIR  ----rwed  14.09.2026 09:06:31.00  ",
+    "    cube-chunky.lua                                 948  ----rwed  14.09.2026 09:06:31.00  ",
+    "    cube.lua                                        949  ----rwed  14.09.2026 09:06:31.00  ",
+    "    default.lua                                     643  ----rwed  14.09.2026 09:06:31.00  ",
+    "    layers.lua                                      406  ----rwed  14.09.2026 09:06:31.00  ",
+    "  KALMS.TXT                                        2470  ----rwed  14.09.2026 09:06:31.00  ",
+    "  LICENSE.TXT                                      1074  ----rwed  14.09.2026 09:06:31.00  ",
+    "  MIGA80                                         138036  ----rwed  14.09.2026 09:06:31.00  ",
+    "  README.TXT                                       5138  ----rwed  14.09.2026 09:06:31.00  ",
+    "  S                                                 DIR  ----rwed  14.09.2026 09:06:31.00  ",
+    "    Startup-Sequence                                 62  ----rwed  14.09.2026 09:06:31.00  ",
+    "sum:           330  165Ki        168960",
+    "data:          313  156Ki        160256  94.85%",
+    "fs:             17  8.5Ki          8704   5.15%"
   ]
 }

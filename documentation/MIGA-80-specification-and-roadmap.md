@@ -1398,7 +1398,9 @@ It packages all four Lua demos in `SYS:demos` and boots into a graphical
 filesystem selector: mouse selection/double-click load, F2 reopening, folders,
 pagination, cancellation and transactional source validation. The source view
 remains read-only (30 lines, 64 columns); this is not the full Phase 1 shell or
-editor. The release manifest records every packaged payload. See the
+editor. A centered glitch logo and a procedural three-chord Paula jingle now precede
+the selector; see the [boot intro checkpoint](MIGA-80-boot-intro.md).
+The release manifest records every packaged payload and the embedded logo input. See the
 [file selector and distribution checkpoint](MIGA-80-file-selector-and-release.md).
 
 The pinned Musashi runner foundation and compiler connection are implemented.
