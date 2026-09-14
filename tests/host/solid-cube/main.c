@@ -10,37 +10,47 @@
 
 static struct miga80_draw_surface surface;
 static uint8_t pixels[65536], planes[32768];
-static unsigned int frames, lines, clears;
+static unsigned int frames, lines, clears, triangles;
 static unsigned int expected_layer = MIGA80_LAYER_PLANAR;
-static FILE *edges;
+static FILE *edges, *images;
 static uint32_t trace = 0x811c9dc5U;
 static void record(uint32_t v) { trace = ((trace << 5) | (trace >> 27)) ^ v; }
+static int play(void *p,uint32_t id) { (void)p; assert(id==0); record(80);record(id);return 1; }
 static int layer(void *p, uint32_t l) { record(36); record(l); miga80_draw_select(p,l); return 1; }
 static int pset(void *p,uint32_t x,uint32_t y,uint32_t c) { miga80_draw_pset(p,x,y,c); return 1; }
-static int line(void *p,uint32_t x,uint32_t y,uint32_t xx,uint32_t yy,uint32_t c)
+static int tri(void *p,uint32_t x0,uint32_t y0,uint32_t x1,uint32_t y1,
+    uint32_t x2,uint32_t y2,uint32_t c)
 {
-    assert(surface.layer == expected_layer);
-    assert(x < 256 && y < 256 && xx < 256 && yy < 256);
-    assert(c == 2 || c == 4 || c == 6 || c == 8);
-    fprintf(edges,"%u %u %u %u %u %u %u\n",frames,lines%12,x,y,xx,yy,c);
-    record(40); record(x); record(y); record(c); record(44); record(xx); record(yy);
-    miga80_draw_line_start(p,x,y,c); miga80_draw_line_end(p,xx,yy); ++lines;
-    return 1;
+    assert(surface.layer==expected_layer);
+    assert(x0<256 && y0<256 && x1<256 && y1<256 && x2<256 && y2<256);
+    assert(c>=2 && c<=9);
+    fprintf(edges,"%u %u %u %u %u %u %u %u\n",frames,x0,y0,x1,y1,x2,y2,c);
+    record(40);record(x0);record(y0);record(c);
+    record(72);record(x1);record(y1);record(76);record(x2);record(y2);
+    miga80_draw_line_start(p,x0,y0,c);miga80_draw_tri_middle(p,x1,y1);miga80_draw_tri_end(p,x2,y2);
+    ++triangles;return 1;
 }
 static int clear(void *p,uint32_t c) { assert(c==0); record(64); record(c); miga80_draw_clear(p,c); ++clears; return 1; }
 static int flip(void *p)
 {
     unsigned int i, lit = 0;
     (void)p;
-    record(68); ++frames; assert(lines==frames*12);
+    record(68); ++frames; assert(triangles-lines>=2 && triangles-lines<=6); lines=triangles;
     if (expected_layer == MIGA80_LAYER_PIXEL) {
         assert(surface.pixel_written);
         for (i=0;i<sizeof(planes);++i) { assert(planes[i]==0); }
         for (i=0;i<sizeof(pixels);++i) {
-            assert(pixels[i]==0 || pixels[i]==2 || pixels[i]==4 || pixels[i]==6 || pixels[i]==8);
+            assert(pixels[i]<=9);
             if (pixels[i]!=0) { ++lit; }
         }
         assert(lit>0);
+    }
+    {
+        static uint8_t frame[65536];
+        if (expected_layer==MIGA80_LAYER_PLANAR) {
+            for (i=0;i<65536;++i) { frame[i]=miga80_draw_planar_pixel(&surface,i%256,i/256); }
+        } else { memcpy(frame,pixels,sizeof(frame)); }
+        assert(fwrite(frame,1,sizeof(frame),images)==sizeof(frame));
     }
     return 1;
 }
@@ -72,7 +82,7 @@ int main(int argc,char **argv)
     static struct miga80_ir_function ir;
     static struct miga80_value_function value;
     struct miga80_diagnostic diagnostic;
-    struct miga80_ir_runtime runtime={&surface,pset,layer,line,clear,flip,time_now, NULL, NULL, NULL, NULL, NULL};
+    struct miga80_ir_runtime runtime={&surface,pset,layer,NULL,clear,flip,time_now,tri,play,NULL,NULL,NULL};
     char source[4097],path[1024];
     uint8_t code[8192];
     size_t n,size,bound=0;
@@ -89,13 +99,15 @@ int main(int argc,char **argv)
     surface.layer=MIGA80_LAYER_PIXEL;surface.pixels=pixels;
     for(i=0;i<4;++i)surface.planes[i]=planes+i*8192;
     snprintf(path,sizeof(path),"%s/edges.txt",argv[2]);edges=fopen(path,"w");assert(edges);
+    snprintf(path,sizeof(path),"%s/frames.bin",argv[2]);images=fopen(path,"wb");assert(images);
     if(!miga80_parse_function(source,n,&ast,&diagnostic) || !miga80_lower_function(&ast,&ir,&diagnostic) ||
        !miga80_build_value_ir(&ir,&value,&diagnostic) ||
        !miga80_evaluate_ir_with_runtime(&ir,NULL,0,&result,&runtime,&diagnostic)) {
         fprintf(stderr,"%u:%u %s\n",diagnostic.line,diagnostic.column,diagnostic.message);return 1;
     }
-    fclose(edges);
-    assert(frames==250 && clears==frames && lines==3000);
+    fclose(edges);fclose(images);
+    printf("ast_nodes=%u\nstatements=%u\nlocals=%u\n",ast.node_count,ast.statement_count,ast.local_count);
+    assert(frames==250 && clears==frames && triangles>=500 && triangles<=1500);
     snprintf(path,sizeof(path),"%s/trig-table.s",argv[2]);f=fopen(path,"w");assert(f);
     for(i=0;i<250;++i) {
         const int32_t angle=(int32_t)(((int64_t)(i*65536U/25U)*52429)/65536);
@@ -110,7 +122,7 @@ int main(int argc,char **argv)
         int ok=mode==1 ? miga80_encode_m68k_o1(code,sizeof(code),&value,&size,&diagnostic) :
                miga80_encode_m68k_o1_guarded(code,sizeof(code),&value,&size,&bound,&diagnostic);
         if(!ok){fprintf(stderr,"%u:%u %s\n",diagnostic.line,diagnostic.column,diagnostic.message);return 1;}
-        assert(size<=4096);
+        assert(size<=8192);
         snprintf(path,sizeof(path),"%s/mode%u.bin",argv[2],mode);f=fopen(path,"wb");assert(f);
         assert(fwrite(code,1,size,f)==size);fclose(f);
         snprintf(path,sizeof(path),"%s/mode%u.s",argv[2],mode);f=fopen(path,"w");assert(f);

@@ -116,7 +116,7 @@ edge checks for zero before decrementing, changes only CCR on the permitted
 path, and reports fault 3 through the core handler on exhaustion. Unguarded
 O0/O1 oracle images retain their original context requirements.
 
-The optional drawing profile extends the guarded prefix to 72 bytes:
+The optional drawing profile extends the guarded prefix to 100 bytes:
 
 | Offset | Drawing profile field |
 |---:|---|
@@ -129,6 +129,13 @@ The optional drawing profile extends the guarded prefix to 72 bytes:
 | `60` | `time` handler: no arguments, returns Q16.16 seconds in D0 |
 | `64` | `cls` handler: D0 = u8 color, no result |
 | `68` | `flip` handler: no arguments or result |
+| `72` | `tri_middle` handler: D0/D1 = x1/y1 |
+| `76` | `tri_end` handler: D0/D1 = x2/y2 |
+| `80` | `music_play` handler: D0 = bounded u8 constant-pool resource index |
+| `84` | `music_stop` handler: no arguments or result |
+| `88` | `music_position` handler: returns i32 next-row position, or -1 |
+| `92` | `music_mute` handler: D0 = u8 channel mute mask |
+| `96` | Private music-owner pointer used by trusted shims |
 
 `layer(PLANAR)` and `layer(PIXEL)` are symbolic source intrinsics. A source
 `line(x0,y0,x1,y1,color)` evaluates all arguments before the two ordered calls;
@@ -141,6 +148,9 @@ for trusted C helpers. Values live across any call survive its caller-saved
 clobbers; returning calls produce a newly allocated value from D0. See
 [drawing primitives](MIGA-80-drawing-primitives.md) and
 [animation semantics](MIGA-80-cube-animation.md).
+`music_play` accepts only a literal path in Lua; the host preloads that pool
+entry and the generated code passes its index, never a file handle or pointer.
+See [music API and resource lifetime](MIGA-80-mod-playback.md).
 
 ## Stack and frame contract
 
@@ -325,3 +335,9 @@ Run the host contract and generated-code checks with:
 gmake compiler-abi-test miga68k-test compiler-execute-test compiler-spill-test
 gmake compiler-call-test
 ```
+
+`tri(x0,y0,x1,y1,x2,y2,color)` evaluates its seven arguments in source order,
+then calls `line_start(x0,y0,color)`, `tri_middle(x1,y1)` and `tri_end(x2,y2)`.
+All three are ordered effects with the existing D0-D2/A0-A1 clobber contract.
+The last call rasterizes the whole triangle. The owner retains edge scratch;
+no triangle arrays are allocated on the generated worker stack.

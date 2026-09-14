@@ -126,6 +126,13 @@ case "$MIGA80_MODE" in
       >"$MIGA80_TEST_STARTUP"
     python3 "$MIGA80_PROJECT_ROOT/scripts/prepare-browser-test.py" "$MIGA80_RUN_ADF"
     ;;
+  SOLIDTEST|SOLIDPIXELTEST)
+    MIGA80_SOLID_FILE=cube-solid.lua
+    if [ "$MIGA80_MODE" = SOLIDPIXELTEST ]; then MIGA80_SOLID_FILE=cube-solid-chunky.lua; fi
+    printf '%s\n' \
+      "SYS:MIGA80 SYS:demos/$MIGA80_SOLID_FILE SYS:BOOTED.TXT $MIGA80_MODE $MIGA80_C2P_ARGUMENT" \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
   CUBETEST|CUBEPIXELTEST)
     printf '%s\n' \
       "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE $MIGA80_C2P_ARGUMENT" \
@@ -199,7 +206,7 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
-    elif [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
+    elif [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ] || [ "$MIGA80_MODE" = SOLIDTEST ] || [ "$MIGA80_MODE" = SOLIDPIXELTEST ]; then
       if /usr/bin/grep -q '^miga80_cube_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
@@ -244,8 +251,10 @@ if ! xdftool "$MIGA80_RUN_ADF" read BOOTED.TXT "$MIGA80_REPORT" \
   exit 1
 fi
 
-if [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
-  if [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
+if [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ] || [ "$MIGA80_MODE" = SOLIDTEST ] || [ "$MIGA80_MODE" = SOLIDPIXELTEST ]; then
+  if [ "$MIGA80_MODE" = SOLIDTEST ] || [ "$MIGA80_MODE" = SOLIDPIXELTEST ]; then
+    /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/$MIGA80_MODE-fs-uae.txt"
+  elif [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
     /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-chunky-fs-uae.txt"
     /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-chunky-$MIGA80_C2P_REPORT_NAME-fs-uae.txt"
   else
@@ -258,7 +267,11 @@ s = p.read_text()
 values = dict(line.split('=', 1) for line in s.splitlines())
 assert int(values.get('frames', '0')) >= 2, s
 assert 10 * 65536 <= int(values.get('elapsed_q16', '0')) < 11 * 65536, s
-if sys.argv[3] == 'CUBEPIXELTEST':
+if sys.argv[3] in ('SOLIDTEST', 'SOLIDPIXELTEST'):
+    assert 490 <= int(values['music_ticks']) <= 550, s
+    assert 80 <= int(values['music_position']) <= 92, s
+    assert int(values['music_starts']) == 1 and int(values['music_dma_seen']) == 15, s
+if sys.argv[3] in ('CUBEPIXELTEST', 'SOLIDPIXELTEST'):
     assert values['c2p_backend'] == sys.argv[2].lower(), s
     for sample in range(2):
         v = {k.removeprefix(f'sample{sample}_'): int(n) for k, n in values.items()
@@ -271,12 +284,14 @@ if sys.argv[3] == 'CUBEPIXELTEST':
         print(f"{values['c2p_backend']} sample {sample}: {v['frames']} frames, "
               f"{v['elapsed_q16']/65536:.4f} s, C2P mean "
               f"{1000*v['c2p_ticks']/v['c2p_calls']/v['eclock_hz']:.3f} ms")
-    p.with_name(f'cube-chunky-{sys.argv[6]}-fs-uae.json').write_text(json.dumps({
+    metadata_name = (f'cube-chunky-{sys.argv[6]}-fs-uae.json'
+                     if sys.argv[3] == 'CUBEPIXELTEST' else f'{sys.argv[3]}-fs-uae.json')
+    p.with_name(metadata_name).write_text(json.dumps({
         'adf_sha256': hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest(),
         'fast_kib': int(sys.argv[5]), 'chip_kib': 2048, 'accuracy': 1, 'model': 'A1200 PAL'
     }, indent=2) + '\n')
 p.write_text(''.join(line + '\n' for line in s.splitlines()
-                     if not line.startswith(('frames=', 'elapsed_q16=', 'c2p_backend=', 'sample0_', 'sample1_'))))
+                     if not line.startswith(('frames=', 'elapsed_q16=', 'c2p_backend=', 'sample0_', 'sample1_', 'music_'))))
 PY_CHECK
 fi
 if ! /usr/bin/diff -u "$MIGA80_EXPECTED" "$MIGA80_REPORT"; then

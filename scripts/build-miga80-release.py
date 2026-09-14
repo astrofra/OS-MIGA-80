@@ -25,6 +25,8 @@ def main():
         "DATA/FONT4X8.BIN": font,
         "README.TXT": pathlib.Path("assets/demo/README.TXT"),
         "LICENSE.TXT": pathlib.Path("LICENSE"),
+        "PTPLAYER.TXT": pathlib.Path("third_party/ptplayer/LICENSE"),
+        "mods/93_10_12_A_SYNTH_1.mod": pathlib.Path("works/mods/93_10_12_A_SYNTH_1.mod"),
         "KALMS.TXT": pathlib.Path("third_party/kalms-c2p/readme.txt"),
         **{f"demos/{p.name}": p for p in demos},
     }
@@ -35,7 +37,7 @@ def main():
     # An interrupted build cannot destroy the previous reference disk.
     temporary = output.with_suffix(".building.adf")
     command = ["xdftool", "-f", str(temporary), "create", "+", "format", "MIGA80", "ofs"]
-    for directory in ("S", "DATA", "demos"):
+    for directory in ("S", "DATA", "demos", "mods"):
         command += ["+", "makedir", directory]
     for destination, source in files.items():
         command += ["+", "write", str(source), destination]

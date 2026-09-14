@@ -221,6 +221,10 @@ static int emit_instruction(
     case MIGA80_IR_GT_U32:
     case MIGA80_IR_GE_U32:
         return emit_binary(encoder, instruction);
+    case MIGA80_IR_CALL_MUSIC_PLAY:
+    case MIGA80_IR_CALL_MUSIC_STOP:
+    case MIGA80_IR_CALL_MUSIC_POSITION:
+    case MIGA80_IR_CALL_MUSIC_MUTE:
     case MIGA80_IR_CALL_SIN:
     case MIGA80_IR_CALL_COS:
     case MIGA80_IR_CALL_TIME:
@@ -228,19 +232,35 @@ static int emit_instruction(
     case MIGA80_IR_CALL_FLIP:
         {
         const enum miga80_ir_opcode op = instruction->opcode;
-        const unsigned int offset = op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
+        const unsigned int offset = op == MIGA80_IR_CALL_MUSIC_PLAY ? MIGA80_ABI_RUNTIME_MUSIC_PLAY_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_STOP ? MIGA80_ABI_RUNTIME_MUSIC_STOP_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_POSITION ? MIGA80_ABI_RUNTIME_MUSIC_POSITION_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_MUTE ? MIGA80_ABI_RUNTIME_MUSIC_MUTE_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
             op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
             op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
             op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
-        return ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP) || emit_u16(encoder, 0x201fU)) &&
+        return ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_POSITION) || emit_u16(encoder, 0x201fU)) &&
             emit_u16(encoder, 0x206dU) && emit_u16(encoder, (uint16_t)offset) && emit_u16(encoder, 0x4e90U) &&
-            ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP) || emit_u16(encoder, 0x2f00U));
+            ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) || emit_u16(encoder, 0x2f00U));
         }
     case MIGA80_IR_CALL_LAYER:
         return emit_u16(encoder, UINT16_C(0x201f)) &&
                emit_u16(encoder, UINT16_C(0x206d)) &&
                emit_u16(encoder, MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET) &&
                emit_u16(encoder, UINT16_C(0x4e90));
+    case MIGA80_IR_CALL_TRI:
+        return emit_u16(encoder, 0x202fU) && emit_u16(encoder, 24U) &&
+               emit_u16(encoder, 0x222fU) && emit_u16(encoder, 20U) &&
+               emit_u16(encoder, 0x2417U) && emit_u16(encoder, 0x206dU) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET) && emit_u16(encoder, 0x4e90U) &&
+               emit_u16(encoder, 0x202fU) && emit_u16(encoder, 16U) &&
+               emit_u16(encoder, 0x222fU) && emit_u16(encoder, 12U) && emit_u16(encoder, 0x206dU) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_TRI_MIDDLE_HANDLER_OFFSET) && emit_u16(encoder, 0x4e90U) &&
+               emit_u16(encoder, 0x202fU) && emit_u16(encoder, 8U) &&
+               emit_u16(encoder, 0x222fU) && emit_u16(encoder, 4U) && emit_u16(encoder, 0x206dU) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_TRI_END_HANDLER_OFFSET) && emit_u16(encoder, 0x4e90U) &&
+               emit_u16(encoder, 0x4fefU) && emit_u16(encoder, 28U);
     case MIGA80_IR_CALL_LINE:
         /* Keep all five evaluated arguments on stack across the setup call. */
         return emit_u16(encoder, UINT16_C(0x202f)) && emit_u16(encoder, 16U) &&

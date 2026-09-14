@@ -21,6 +21,7 @@ static volatile struct Custom *const draw_custom =
 
 struct draw_command {
     struct miga80_draw_line line;
+    struct miga80_draw_triangle triangle;
     UWORD pixel;
 };
 
@@ -28,11 +29,13 @@ struct miga80_host_drawing {
     struct miga80_draw_surface surface;
     struct Task *owner;
     UBYTE *storage;
+    UBYTE *triangle_mask;
     BYTE request_bit;
     volatile ULONG pending;
     ULONG count;
     struct draw_command commands[DRAW_BATCH_SIZE];
     ULONG lines, frames, elapsed;
+    ULONG triangles;
     struct miga80_animation *animation;
     enum miga80_c2p_backend backend;
     struct miga80_c2p_stats c2p;
@@ -132,6 +135,59 @@ static void clear_hardware(struct miga80_host_drawing *drawing, ULONG color)
     }
 }
 
+static void draw_hardware_triangle(struct miga80_host_drawing *drawing,
+    const struct miga80_draw_triangle *triangle)
+{
+    struct miga80_draw_spans *s = &drawing->surface.spans;
+    ULONG left_word, words, offset, end, y, plane;
+    UWORD size, modulo;
+    if (!miga80_draw_triangle_spans(s, triangle)) { return; }
+    /* The exclusive fill retains the right boundary and removes the left:
+     * seed at left-1 and right-1 to produce exactly [left,right). At x=0,
+     * the left seed lies outside the display; carry simply runs off that row. */
+    left_word = (s->min_x != 0U ? s->min_x - 1U : 0U) >> 4;
+    words = ((s->max_x - 1U) >> 4) - left_word + 1U;
+    offset = s->top * 32U + left_word * 2U;
+    end = (s->bottom - 1U) * 32U + (left_word + words - 1U) * 2U;
+    size = (UWORD)(((s->bottom - s->top) << 6) | words);
+    modulo = (UWORD)(32U - words * 2U);
+    wait_blitter();
+    draw_custom->bltcon0 = DEST;
+    draw_custom->bltcon1 = 0U;
+    draw_custom->bltdmod = modulo;
+    draw_custom->bltdpt = drawing->triangle_mask + offset;
+    draw_custom->bltsize = size;
+    wait_blitter();
+    for (y = s->top; y < s->bottom; ++y) {
+        ULONG x;
+        if (s->left[y] >= s->right[y]) { continue; }
+        x = (ULONG)s->right[y] - 1U;
+        drawing->triangle_mask[y * 32U + (x >> 3)] |= (UBYTE)(0x80U >> (x & 7U));
+        if (s->left[y] != 0) {
+            x = (ULONG)s->left[y] - 1U;
+            drawing->triangle_mask[y * 32U + (x >> 3)] |= (UBYTE)(0x80U >> (x & 7U));
+        }
+    }
+    draw_custom->bltcon0 = SRCA | DEST | A_TO_D;
+    draw_custom->bltcon1 = BLITREVERSE | FILL_XOR;
+    draw_custom->bltafwm = draw_custom->bltalwm = 0xffffU;
+    draw_custom->bltamod = draw_custom->bltdmod = modulo;
+    draw_custom->bltapt = draw_custom->bltdpt = drawing->triangle_mask + end;
+    draw_custom->bltsize = size;
+    for (plane = 0U; plane < 4U; ++plane) {
+        wait_blitter();
+        /* Color overwrite: D=A|C for a set color bit, D=~A&C otherwise. */
+        draw_custom->bltcon0 = SRCA | SRCC | DEST |
+            ((triangle->color & (1U << plane)) != 0U ? 0xfaU : 0x0aU);
+        draw_custom->bltcon1 = 0U;
+        draw_custom->bltamod = draw_custom->bltcmod = draw_custom->bltdmod = modulo;
+        draw_custom->bltapt = drawing->triangle_mask + offset;
+        draw_custom->bltcpt = draw_custom->bltdpt = drawing->surface.planes[plane] + offset;
+        draw_custom->bltsize = size;
+    }
+    ++drawing->triangles;
+}
+
 void miga80_host_drawing_flush(struct miga80_host_drawing *drawing)
 {
     ULONG index;
@@ -150,7 +206,9 @@ void miga80_host_drawing_flush(struct miga80_host_drawing *drawing)
     draw_custom->dmacon = DMAF_SETCLR | DMAF_BLITTER | DMAF_BLITHOG;
     for (index = 0U; index < drawing->count; ++index) {
         const struct draw_command *command = &drawing->commands[index];
-        if (command->pixel == 2U) {
+        if (command->pixel == 3U) {
+            draw_hardware_triangle(drawing, &command->triangle);
+        } else if (command->pixel == 2U) {
             clear_hardware(drawing, command->line.color);
         } else if (command->pixel != 0U) {
             wait_blitter();
@@ -169,12 +227,8 @@ void miga80_host_drawing_flush(struct miga80_host_drawing *drawing)
     Permit();
 }
 
-static void submit_command(struct miga80_host_drawing *drawing,
-                             const struct miga80_draw_line *line, UWORD pixel)
+static void command_ready(struct miga80_host_drawing *drawing)
 {
-    struct draw_command *command = &drawing->commands[drawing->count];
-    command->line = *line;
-    command->pixel = pixel;
     ++drawing->count;
     if (drawing->count == DRAW_BATCH_SIZE) {
         if (FindTask(NULL) == drawing->owner) { /* NOSUPERVISOR */
@@ -187,6 +241,24 @@ static void submit_command(struct miga80_host_drawing *drawing,
             while (drawing->pending != 0U) { }
         }
     }
+}
+
+static void submit_command(struct miga80_host_drawing *drawing,
+    const struct miga80_draw_line *line, UWORD pixel)
+{
+    struct draw_command *command = &drawing->commands[drawing->count];
+    command->line = *line;
+    command->pixel = pixel;
+    command_ready(drawing);
+}
+
+static void submit_triangle(void *owner, const struct miga80_draw_triangle *triangle)
+{
+    struct miga80_host_drawing *drawing = owner;
+    struct draw_command *command = &drawing->commands[drawing->count];
+    command->triangle = *triangle;
+    command->pixel = 3U;
+    command_ready(drawing);
 }
 
 static void submit_line(void *owner, const struct miga80_draw_line *line)
@@ -328,7 +400,8 @@ struct miga80_host_drawing *miga80_host_drawing_create(
     drawing->owner = FindTask(NULL);
     drawing->storage = AllocMem(4U * MIGA80_DRAW_PLANE_BYTES,
                                 MEMF_CHIP | MEMF_PUBLIC | MEMF_CLEAR);
-    if (drawing->request_bit < 0 || drawing->storage == NULL) {
+    drawing->triangle_mask = AllocMem(MIGA80_DRAW_PLANE_BYTES, MEMF_CHIP | MEMF_CLEAR);
+    if (drawing->request_bit < 0 || drawing->storage == NULL || drawing->triangle_mask == NULL) {
         miga80_host_drawing_destroy(drawing);
         return NULL;
     }
@@ -336,6 +409,7 @@ struct miga80_host_drawing *miga80_host_drawing_create(
     drawing->surface.pixels = pixels;
     drawing->surface.planar_line = submit_line;
     drawing->surface.planar_pset = submit_pixel;
+    drawing->surface.planar_tri = submit_triangle;
     drawing->surface.owner = drawing;
     drawing->surface.clear = submit_clear;
     drawing->surface.flip = submit_flip;
@@ -386,6 +460,11 @@ ULONG miga80_host_drawing_lines(struct miga80_host_drawing *drawing)
     return drawing->lines;
 }
 
+ULONG miga80_host_drawing_triangles(struct miga80_host_drawing *drawing)
+{
+    return drawing->triangles;
+}
+
 void miga80_host_drawing_destroy(struct miga80_host_drawing *drawing)
 {
     WaitBlit();
@@ -397,6 +476,9 @@ void miga80_host_drawing_destroy(struct miga80_host_drawing *drawing)
     }
     if (drawing->storage != NULL) {
         FreeMem(drawing->storage, 4U * MIGA80_DRAW_PLANE_BYTES);
+    }
+    if (drawing->triangle_mask != NULL) {
+        FreeMem(drawing->triangle_mask, MIGA80_DRAW_PLANE_BYTES);
     }
     FreeMem(drawing, sizeof(*drawing));
 }

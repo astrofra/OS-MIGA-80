@@ -1,6 +1,6 @@
 miga80_graphics_report=1
-pixel_checksum=003971a5
-planar_checksum=4235248a
+pixel_checksum=18d74cc6
+planar_checksum=022d41fe
 planar_lines=19
 rounds=3
 pixel_pf1=pass

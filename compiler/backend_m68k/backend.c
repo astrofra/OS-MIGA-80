@@ -531,6 +531,10 @@ int miga80_emit_gnu_m68k(FILE *output,
                                       (unsigned int)instruction->operand);
             }
             break;
+        case MIGA80_IR_CALL_MUSIC_PLAY:
+        case MIGA80_IR_CALL_MUSIC_STOP:
+        case MIGA80_IR_CALL_MUSIC_POSITION:
+        case MIGA80_IR_CALL_MUSIC_MUTE:
         case MIGA80_IR_CALL_SIN:
         case MIGA80_IR_CALL_COS:
         case MIGA80_IR_CALL_TIME:
@@ -538,14 +542,18 @@ int miga80_emit_gnu_m68k(FILE *output,
         case MIGA80_IR_CALL_FLIP:
         {
             const enum miga80_ir_opcode op = instruction->opcode;
-            const unsigned int offset = op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
+            const unsigned int offset = op == MIGA80_IR_CALL_MUSIC_PLAY ? MIGA80_ABI_RUNTIME_MUSIC_PLAY_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_STOP ? MIGA80_ABI_RUNTIME_MUSIC_STOP_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_POSITION ? MIGA80_ABI_RUNTIME_MUSIC_POSITION_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_MUSIC_MUTE ? MIGA80_ABI_RUNTIME_MUSIC_MUTE_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
                 op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
                 op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
                 op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
-            success = ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP) ||
+            success = ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_POSITION) ||
                 output_line(output, "        move.l  (%%a7)+,%%d0\n")) &&
                 output_line(output, "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n", offset) &&
-                ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP) ||
+                ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) ||
                  output_line(output, "        move.l  %%d0,-(%%a7)\n"));
             break;
         }
@@ -554,6 +562,23 @@ int miga80_emit_gnu_m68k(FILE *output,
                 "        move.l  (%%a7)+,%%d0\n"
                 "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n",
                 MIGA80_ABI_RUNTIME_LAYER_HANDLER_OFFSET);
+            break;
+        case MIGA80_IR_CALL_TRI:
+            success = output_line(output,
+                "        move.l  24(%%a7),%%d0\n"
+                "        move.l  20(%%a7),%%d1\n"
+                "        move.l  (%%a7),%%d2\n"
+                "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n"
+                "        move.l  16(%%a7),%%d0\n"
+                "        move.l  12(%%a7),%%d1\n"
+                "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n"
+                "        move.l  8(%%a7),%%d0\n"
+                "        move.l  4(%%a7),%%d1\n"
+                "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n"
+                "        lea     28(%%a7),%%a7\n",
+                MIGA80_ABI_RUNTIME_LINE_START_HANDLER_OFFSET,
+                MIGA80_ABI_RUNTIME_TRI_MIDDLE_HANDLER_OFFSET,
+                MIGA80_ABI_RUNTIME_TRI_END_HANDLER_OFFSET);
             break;
         case MIGA80_IR_CALL_LINE:
             success = output_line(output,

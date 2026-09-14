@@ -63,7 +63,7 @@ Normal execution writes diagnostics to RAM only.
 RAM. Temporary fixtures exercise filtering, nested/empty folders, multiple
 pages, missing files, oversized sources and malformed source text. The target
 regression uses the same input dispatcher as real IDCMP, including real DOS
-scanning and Intuition double-click timing. It checks all four demo loads,
+scanning and Intuition double-click timing. It checks all six demo loads,
 single-click isolation, different-row click isolation, F2 and mouse reopening,
 F5 execution of the loaded layers demo, ESC return, cancellation, CTRL-Q,
 readback, repeated scans without memory growth, and hosted cleanup.
@@ -77,3 +77,6 @@ regression.
 Physical Amiga feedback remains pending. This is a development preview and
 an initial file-opening workflow, not completion of the roadmap's editor or
 version 1 shell.
+
+The release now also includes `cube-solid.lua` and `cube-solid-chunky.lua`;
+see the [solid cube checkpoint](MIGA-80-solid-cube.md).

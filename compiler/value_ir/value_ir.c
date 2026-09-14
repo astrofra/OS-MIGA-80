@@ -1021,6 +1021,21 @@ static int lower_block_values(const struct miga80_ir_function *source,
                 0U, 0U, instruction->line, instruction->column, diagnostic);
             break;
         }
+        case MIGA80_IR_CALL_MUSIC_POSITION:
+            value = add_value(result, MIGA80_TYPE_I32, MIGA80_VALUE_CALL_MUSIC_POSITION,
+                MIGA80_INVALID_VALUE, MIGA80_INVALID_VALUE, 0U, 0U,
+                instruction->line, instruction->column, diagnostic);
+            break;
+        case MIGA80_IR_CALL_MUSIC_PLAY:
+        case MIGA80_IR_CALL_MUSIC_STOP:
+        case MIGA80_IR_CALL_MUSIC_MUTE:
+            value = add_value(result, MIGA80_TYPE_VOID,
+                instruction->opcode == MIGA80_IR_CALL_MUSIC_PLAY ? MIGA80_VALUE_CALL_MUSIC_PLAY :
+                instruction->opcode == MIGA80_IR_CALL_MUSIC_STOP ? MIGA80_VALUE_CALL_MUSIC_STOP : MIGA80_VALUE_CALL_MUSIC_MUTE,
+                instruction->opcode == MIGA80_IR_CALL_MUSIC_STOP ? MIGA80_INVALID_VALUE : stack[--stack_size],
+                MIGA80_INVALID_VALUE, 0U, 0U, instruction->line, instruction->column, diagnostic);
+            if (value != MIGA80_INVALID_VALUE) { continue; }
+            break;
         case MIGA80_IR_CALL_CLS:
         case MIGA80_IR_CALL_FLIP:
             value = add_value(result, MIGA80_TYPE_VOID,
@@ -1038,6 +1053,24 @@ static int lower_block_values(const struct miga80_ir_function *source,
                 continue;
             }
             break;
+        case MIGA80_IR_CALL_TRI: {
+            const unsigned int color = stack[--stack_size];
+            const unsigned int y2 = stack[--stack_size], x2 = stack[--stack_size];
+            const unsigned int y1 = stack[--stack_size], x1 = stack[--stack_size];
+            const unsigned int y0 = stack[--stack_size], x0 = stack[--stack_size];
+            /* Evaluate all seven arguments before these ordered ABI calls. */
+            value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_LINE_START,
+                x0, y0, 0U, 0U, instruction->line, instruction->column, diagnostic);
+            if (value == MIGA80_INVALID_VALUE) { break; }
+            result->values[value].third = color;
+            value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_TRI_MIDDLE,
+                x1, y1, 0U, 0U, instruction->line, instruction->column, diagnostic);
+            if (value == MIGA80_INVALID_VALUE) { break; }
+            value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_TRI_END,
+                x2, y2, 0U, 0U, instruction->line, instruction->column, diagnostic);
+            if (value != MIGA80_INVALID_VALUE) { continue; }
+            break;
+        }
         case MIGA80_IR_CALL_LINE: {
             const unsigned int color = stack[--stack_size];
             const unsigned int y1 = stack[--stack_size];

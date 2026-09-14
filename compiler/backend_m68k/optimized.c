@@ -207,7 +207,7 @@ static int validate_value_function(
             continue;
         }
         if ((miga80_value_is_call(value->opcode)
-                 ? value->type != (value->opcode >= MIGA80_VALUE_CALL_SIN &&
+                 ? value->type != (value->opcode == MIGA80_VALUE_CALL_MUSIC_POSITION ? MIGA80_TYPE_I32 : value->opcode >= MIGA80_VALUE_CALL_SIN &&
                      value->opcode <= MIGA80_VALUE_CALL_TIME ? MIGA80_TYPE_FIX : MIGA80_TYPE_VOID)
                  : !miga80_type_is_value(value->type)) ||
             value->opcode < MIGA80_VALUE_CONSTANT ||

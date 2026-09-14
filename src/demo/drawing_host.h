@@ -35,6 +35,7 @@ int miga80_host_drawing_publish(struct miga80_host_drawing *drawing,
 struct miga80_draw_surface *miga80_host_drawing_surface(
     struct miga80_host_drawing *drawing);
 ULONG miga80_host_drawing_lines(struct miga80_host_drawing *drawing);
+ULONG miga80_host_drawing_triangles(struct miga80_host_drawing *drawing);
 /* Owner only, after removing/joining the generated worker. */
 void miga80_host_drawing_destroy(struct miga80_host_drawing *drawing);
 

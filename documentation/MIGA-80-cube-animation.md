@@ -99,7 +99,7 @@ Le contexte graphique passe de 52 à 72 octets, en conservant tous les offsets
 existants. Les cinq nouveaux services suivent le même contrat D0–D2/A0–A1 ;
 les fonctions mathématiques et l’horloge renvoient leur résultat dans D0.
 Les valeurs vivantes traversent aussi les appels sans argument. Le compilateur
-accepte désormais 80 statements et 384 nœuds AST, avec toujours 16 variables
+accepte désormais 80 statements et 384 nœuds AST, avec maintenant 24 variables
 locales et 32 blocs de contrôle.
 
 L’encodeur direct O1 prend désormais en charge les divisions entières et fixes,
@@ -193,3 +193,6 @@ ASM mask32 et 83 avec l'adaptation Kalms, sur deux exécutions par backend.
 Le disque `build/distribution/miga80-cube-chunky-kalms.adf` démarre Kalms ;
 `miga80-cube-chunky.adf` utilise également Kalms par défaut. Tous deux
 conservent le même Lua.
+
+Les [cubes pleins éclairés](MIGA-80-solid-cube.md) étendent ce runtime avec
+`tri()` et un contexte graphique de 80 octets, sans déplacer les anciens champs.

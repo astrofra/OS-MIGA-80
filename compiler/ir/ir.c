@@ -48,6 +48,9 @@ static int lower_node(const struct miga80_ast_function *ast, int node_index,
     }
     node = &ast->nodes[node_index];
     switch (node->kind) {
+    case MIGA80_AST_MUSIC_POSITION:
+        return emit_instruction(ir, MIGA80_IR_CALL_MUSIC_POSITION, MIGA80_TYPE_I32,
+                                0U, node->line, node->column, diagnostic);
     case MIGA80_AST_SIN:
     case MIGA80_AST_COS:
     case MIGA80_AST_TIME:
@@ -440,18 +443,28 @@ static int lower_statement_list(struct lower_context *context,
                                   statement->column, context->diagnostic)) {
                 return 0;
             }
-        } else if (statement->kind == MIGA80_AST_CALL_PSET ||
+        } else if (statement->kind == MIGA80_AST_CALL_MUSIC_PLAY ||
+                   statement->kind == MIGA80_AST_CALL_MUSIC_STOP ||
+                   statement->kind == MIGA80_AST_CALL_MUSIC_MUTE ||
+                   statement->kind == MIGA80_AST_CALL_PSET ||
                    statement->kind == MIGA80_AST_CALL_LAYER ||
                    statement->kind == MIGA80_AST_CALL_LINE ||
+                   statement->kind == MIGA80_AST_CALL_TRI ||
                    statement->kind == MIGA80_AST_CALL_CLS ||
                    statement->kind == MIGA80_AST_CALL_FLIP) {
-            const unsigned int count = statement->kind == MIGA80_AST_CALL_FLIP ? 0U :
+            const unsigned int count = statement->kind == MIGA80_AST_CALL_MUSIC_STOP ? 0U :
+                statement->kind == MIGA80_AST_CALL_MUSIC_PLAY || statement->kind == MIGA80_AST_CALL_MUSIC_MUTE ? 1U :
+                statement->kind == MIGA80_AST_CALL_FLIP ? 0U :
                 statement->kind == MIGA80_AST_CALL_CLS ? 1U : statement->kind == MIGA80_AST_CALL_LAYER
-                ? 1U : statement->kind == MIGA80_AST_CALL_LINE ? 5U : 3U;
+                ? 1U : statement->kind == MIGA80_AST_CALL_TRI ? 7U : statement->kind == MIGA80_AST_CALL_LINE ? 5U : 3U;
             const enum miga80_ir_opcode opcode =
+                statement->kind == MIGA80_AST_CALL_MUSIC_PLAY ? MIGA80_IR_CALL_MUSIC_PLAY :
+                statement->kind == MIGA80_AST_CALL_MUSIC_STOP ? MIGA80_IR_CALL_MUSIC_STOP :
+                statement->kind == MIGA80_AST_CALL_MUSIC_MUTE ? MIGA80_IR_CALL_MUSIC_MUTE :
                 statement->kind == MIGA80_AST_CALL_FLIP ? MIGA80_IR_CALL_FLIP :
                 statement->kind == MIGA80_AST_CALL_CLS ? MIGA80_IR_CALL_CLS :
                 statement->kind == MIGA80_AST_CALL_LAYER ? MIGA80_IR_CALL_LAYER :
+                statement->kind == MIGA80_AST_CALL_TRI ? MIGA80_IR_CALL_TRI :
                 statement->kind == MIGA80_AST_CALL_LINE ? MIGA80_IR_CALL_LINE :
                                                         MIGA80_IR_CALL_PSET;
             unsigned int argument;
@@ -942,6 +955,11 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
             --stack_size;
             stack[stack_size - 1U] =
                 comparison ? MIGA80_TYPE_BOOL : operand_type;
+        } else if (instruction->opcode == MIGA80_IR_CALL_MUSIC_POSITION) {
+            if (instruction->type != MIGA80_TYPE_I32 || instruction->operand != 0U || stack_size == MIGA80_MAX_IR_STACK) {
+                return fail(diagnostic, instruction->line, instruction->column, "invalid music_position call");
+            }
+            stack[stack_size++] = MIGA80_TYPE_I32;
         } else if (instruction->opcode == MIGA80_IR_CALL_SIN ||
                    instruction->opcode == MIGA80_IR_CALL_COS ||
                    instruction->opcode == MIGA80_IR_CALL_TIME) {
@@ -954,14 +972,20 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                             "typed IR math/clock call has invalid arguments");
             }
             if (clock) { stack[stack_size++] = MIGA80_TYPE_FIX; }
-        } else if (instruction->opcode == MIGA80_IR_CALL_PSET ||
+        } else if (instruction->opcode == MIGA80_IR_CALL_MUSIC_PLAY ||
+                   instruction->opcode == MIGA80_IR_CALL_MUSIC_STOP ||
+                   instruction->opcode == MIGA80_IR_CALL_MUSIC_MUTE ||
+                   instruction->opcode == MIGA80_IR_CALL_PSET ||
                    instruction->opcode == MIGA80_IR_CALL_LAYER ||
                    instruction->opcode == MIGA80_IR_CALL_LINE ||
+                   instruction->opcode == MIGA80_IR_CALL_TRI ||
                    instruction->opcode == MIGA80_IR_CALL_CLS ||
                    instruction->opcode == MIGA80_IR_CALL_FLIP) {
-            const unsigned int count = instruction->opcode == MIGA80_IR_CALL_FLIP ? 0U :
+            const unsigned int count = instruction->opcode == MIGA80_IR_CALL_MUSIC_STOP ? 0U :
+                instruction->opcode == MIGA80_IR_CALL_MUSIC_PLAY || instruction->opcode == MIGA80_IR_CALL_MUSIC_MUTE ? 1U :
+                instruction->opcode == MIGA80_IR_CALL_FLIP ? 0U :
                 instruction->opcode == MIGA80_IR_CALL_CLS ? 1U : instruction->opcode == MIGA80_IR_CALL_LAYER
-                ? 1U : instruction->opcode == MIGA80_IR_CALL_LINE ? 5U : 3U;
+                ? 1U : instruction->opcode == MIGA80_IR_CALL_TRI ? 7U : instruction->opcode == MIGA80_IR_CALL_LINE ? 5U : 3U;
             unsigned int argument;
 
             if (instruction->type != MIGA80_TYPE_VOID ||
@@ -1391,6 +1415,23 @@ int miga80_evaluate_ir_with_runtime(
             case MIGA80_IR_CALL_COS:
                 stack[stack_size - 1U] = (uint32_t)miga80_fix_cos((int32_t)stack[stack_size - 1U]);
                 break;
+            case MIGA80_IR_CALL_MUSIC_PLAY:
+                if (runtime == NULL || runtime->music_play == NULL || !runtime->music_play(runtime->context, stack[--stack_size])) {
+                    return fail(diagnostic, instruction->line, instruction->column, "music_play runtime failed"); }
+                break;
+            case MIGA80_IR_CALL_MUSIC_STOP:
+                if (runtime == NULL || runtime->music_stop == NULL || !runtime->music_stop(runtime->context)) {
+                    return fail(diagnostic, instruction->line, instruction->column, "music_stop runtime failed"); }
+                break;
+            case MIGA80_IR_CALL_MUSIC_MUTE:
+                if (runtime == NULL || runtime->music_mute == NULL || !runtime->music_mute(runtime->context, stack[--stack_size])) {
+                    return fail(diagnostic, instruction->line, instruction->column, "music_mute runtime failed"); }
+                break;
+            case MIGA80_IR_CALL_MUSIC_POSITION:
+                if (runtime == NULL || runtime->music_position == NULL) {
+                    return fail(diagnostic, instruction->line, instruction->column, "music_position runtime missing"); }
+                stack[stack_size++] = runtime->music_position(runtime->context);
+                break;
             case MIGA80_IR_CALL_TIME:
                 if (runtime == NULL || runtime->time == NULL) { return fail(diagnostic,
                     instruction->line, instruction->column, "time runtime missing"); }
@@ -1410,6 +1451,15 @@ int miga80_evaluate_ir_with_runtime(
                     !runtime->layer(runtime->context, stack[0])) {
                     return fail(diagnostic, instruction->line,
                                 instruction->column, "layer runtime service failed");
+                }
+                stack_size = 0U;
+                break;
+            case MIGA80_IR_CALL_TRI:
+                if (runtime == NULL || runtime->tri == NULL ||
+                    !runtime->tri(runtime->context, stack[0], stack[1], stack[2],
+                                  stack[3], stack[4], stack[5], stack[6])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column, "tri runtime service failed");
                 }
                 stack_size = 0U;
                 break;

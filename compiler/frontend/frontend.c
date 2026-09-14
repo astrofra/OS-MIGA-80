@@ -1312,6 +1312,14 @@ static int parse_primary(struct parser *parser)
 {
     const struct token token = parser->current;
 
+    if (current_identifier_is(parser, "music_position")) {
+        parser_advance(parser);
+        if (!expect(parser, TOKEN_LEFT_PAREN) || !expect(parser, TOKEN_RIGHT_PAREN)) {
+            return MIGA80_INVALID_NODE;
+        }
+        return add_node(parser, MIGA80_AST_MUSIC_POSITION, token.line, token.column,
+                        MIGA80_INVALID_NODE, MIGA80_INVALID_NODE, 0U, 0U, MIGA80_TYPE_I32);
+    }
     if (current_identifier_is(parser, "sin") ||
         current_identifier_is(parser, "cos") ||
         current_identifier_is(parser, "time")) {
@@ -1953,14 +1961,19 @@ static int current_identifier_is(const struct parser *parser,
 static unsigned int parse_graphics_statement(struct parser *parser)
 {
     const struct token call = parser->current;
+    const int is_play = current_identifier_is(parser, "music_play");
+    const int is_stop = current_identifier_is(parser, "music_stop");
+    const int is_mute = current_identifier_is(parser, "music_mute");
     const int is_layer = current_identifier_is(parser, "layer");
     const int is_line = current_identifier_is(parser, "line");
+    const int is_tri = current_identifier_is(parser, "tri");
     const int is_cls = current_identifier_is(parser, "cls");
     const int is_flip = current_identifier_is(parser, "flip");
-    const unsigned int count = is_flip ? 0U : is_cls || is_layer ? 1U : is_line ? 5U : 3U;
-    const enum miga80_ast_statement_kind kind = is_flip ? MIGA80_AST_CALL_FLIP :
+    const unsigned int count = is_stop ? 0U : is_play || is_mute ? 1U : is_flip ? 0U : is_cls || is_layer ? 1U : is_tri ? 7U : is_line ? 5U : 3U;
+    const enum miga80_ast_statement_kind kind = is_play ? MIGA80_AST_CALL_MUSIC_PLAY :
+        is_stop ? MIGA80_AST_CALL_MUSIC_STOP : is_mute ? MIGA80_AST_CALL_MUSIC_MUTE : is_flip ? MIGA80_AST_CALL_FLIP :
         is_cls ? MIGA80_AST_CALL_CLS : is_layer
-        ? MIGA80_AST_CALL_LAYER : is_line ? MIGA80_AST_CALL_LINE
+        ? MIGA80_AST_CALL_LAYER : is_tri ? MIGA80_AST_CALL_TRI : is_line ? MIGA80_AST_CALL_LINE
                                         : MIGA80_AST_CALL_PSET;
     unsigned int statement_index;
     unsigned int argument;
@@ -1971,7 +1984,21 @@ static unsigned int parse_graphics_statement(struct parser *parser)
         return MIGA80_INVALID_STATEMENT;
     }
     for (argument = 0U; argument < count; ++argument) {
-        if (is_layer) {
+        if (is_play) {
+            int index;
+            if (parser->current.kind != TOKEN_STRING_LITERAL) {
+                set_diagnostic(parser->diagnostic, call.line, call.column,
+                               "music_play requires a literal MOD path");
+                parser->failed = 1;
+                return MIGA80_INVALID_STATEMENT;
+            }
+            index = intern_pool_literal(parser, &parser->current, MIGA80_TYPE_STRING);
+            if (index < 0) { return MIGA80_INVALID_STATEMENT; }
+            arguments[argument] = add_node(parser, MIGA80_AST_LITERAL_I32,
+                call.line, call.column, MIGA80_INVALID_NODE, MIGA80_INVALID_NODE,
+                (uint32_t)index, 0U, MIGA80_TYPE_U8);
+            parser_advance(parser);
+        } else if (is_layer) {
             const int planar = current_identifier_is(parser, "PLANAR");
             if (!planar && !current_identifier_is(parser, "PIXEL")) {
                 set_diagnostic(parser->diagnostic, parser->current.line,
@@ -2062,8 +2089,12 @@ static int parse_control_statement_list(struct parser *parser,
         } else if (current_identifier_is(parser, "pset") ||
                    current_identifier_is(parser, "layer") ||
                    current_identifier_is(parser, "line") ||
+                   current_identifier_is(parser, "tri") ||
                    current_identifier_is(parser, "cls") ||
-                   current_identifier_is(parser, "flip")) {
+                   current_identifier_is(parser, "flip") ||
+                   current_identifier_is(parser, "music_play") ||
+                   current_identifier_is(parser, "music_stop") ||
+                   current_identifier_is(parser, "music_mute")) {
             statement = parse_graphics_statement(parser);
         } else {
             statement = parse_assignment(parser);
@@ -2241,8 +2272,12 @@ int miga80_parse_function(const char *source, size_t source_size,
         } else if (current_identifier_is(&parser, "pset") ||
                    current_identifier_is(&parser, "layer") ||
                    current_identifier_is(&parser, "line") ||
+                   current_identifier_is(&parser, "tri") ||
                    current_identifier_is(&parser, "cls") ||
-                   current_identifier_is(&parser, "flip")) {
+                   current_identifier_is(&parser, "flip") ||
+                   current_identifier_is(&parser, "music_play") ||
+                   current_identifier_is(&parser, "music_stop") ||
+                   current_identifier_is(&parser, "music_mute")) {
             statement = parse_graphics_statement(&parser);
         } else {
             statement = parse_assignment(&parser);

@@ -51,8 +51,11 @@ enum miga80_ir_opcode {
     MIGA80_IR_CALL_PSET,
     MIGA80_IR_CALL_LAYER,
     MIGA80_IR_CALL_LINE,
+    MIGA80_IR_CALL_TRI,
     MIGA80_IR_CALL_SIN, MIGA80_IR_CALL_COS, MIGA80_IR_CALL_TIME,
     MIGA80_IR_CALL_CLS, MIGA80_IR_CALL_FLIP,
+    MIGA80_IR_CALL_MUSIC_PLAY, MIGA80_IR_CALL_MUSIC_STOP,
+    MIGA80_IR_CALL_MUSIC_POSITION, MIGA80_IR_CALL_MUSIC_MUTE,
     MIGA80_IR_BRANCH_FALSE,
     MIGA80_IR_JUMP,
     MIGA80_IR_RETURN
@@ -98,6 +101,12 @@ struct miga80_ir_runtime {
     int (*cls)(void *context, uint32_t color);
     int (*flip)(void *context);
     uint32_t (*time)(void *context);
+    int (*tri)(void *context, uint32_t x0, uint32_t y0, uint32_t x1,
+               uint32_t y1, uint32_t x2, uint32_t y2, uint32_t color);
+    int (*music_play)(void *context, uint32_t resource);
+    int (*music_stop)(void *context);
+    uint32_t (*music_position)(void *context);
+    int (*music_mute)(void *context, uint32_t mask);
 };
 
 int miga80_lower_function(const struct miga80_ast_function *ast,

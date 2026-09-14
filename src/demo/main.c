@@ -39,6 +39,7 @@
 #include "demo/stop_test.h"
 #include "demo/file_picker.h"
 #include "demo/intro.h"
+#include "demo/music_host.h"
 #include "demo/drawing_host.h"
 #include "drawing_test_data.h"
 #include "ui/palette.h"
@@ -96,8 +97,9 @@ static int compiler_run_result;
 static struct miga80_drawing_context last_drawing_context;
 #define last_runtime last_drawing_context.runtime
 static uint32_t last_planar_checksum;
-static ULONG last_planar_lines;
+static ULONG last_planar_lines, last_planar_triangles;
 static ULONG last_animation_frames, last_animation_elapsed;
+static struct miga80_music_stats last_music;
 static enum miga80_c2p_backend c2p_backend = MIGA80_C2P_DEFAULT;
 static struct miga80_c2p_stats last_c2p;
 static struct {
@@ -146,6 +148,8 @@ extern void miga80_runtime_flip(void);
 extern void miga80_runtime_layer(void);
 extern void miga80_runtime_line_start(void);
 extern void miga80_runtime_line_end(void);
+extern void miga80_runtime_tri_middle(void);
+extern void miga80_runtime_tri_end(void);
 extern void miga80_runtime_fault(void);
 extern void miga80_runtime_test_fault(void);
 extern void miga80_runtime_test_stall(void);
@@ -793,6 +797,7 @@ static int verify_drawing(struct Screen *screen, struct miga80_host_drawing *dra
 
 struct demo_run_events {
     struct miga80_supervisor_events drawing;
+    struct miga80_supervisor_events music;
     struct miga80_supervisor_events input_test;
 };
 
@@ -803,6 +808,8 @@ static int service_run_events(void *data, ULONG signals)
         !events->input_test.service(events->input_test.data, signals)) {
         return 0;
     }
+    if ((signals & events->music.signals) != 0U &&
+        !events->music.service(events->music.data, signals)) { return 0; }
     return (signals & events->drawing.signals) == 0U ||
            events->drawing.service(events->drawing.data, signals);
 }
@@ -822,6 +829,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     uint8_t *code = NULL;
     UBYTE *runtime_stack = NULL;
     struct miga80_host_drawing *drawing = NULL;
+    struct miga80_host_music *music = NULL;
     struct demo_run_events run_events = {0};
     const ULONG runtime_allocation_bytes = DEMO_RUNTIME_STACK_TOTAL_BYTES +
         (supervisor_enabled ? MIGA80_SUPERVISOR_STACK_TOTAL_BYTES : 0U);
@@ -835,8 +843,9 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     ++compile_attempts;
     last_framebuffer_checksum = 0U;
     last_planar_checksum = 0U;
-    last_planar_lines = 0U;
+    last_planar_lines = last_planar_triangles = 0U;
     last_animation_frames = last_animation_elapsed = 0U;
+    (void)memset(&last_music, 0, sizeof(last_music));
     (void)memset(&last_c2p, 0, sizeof(last_c2p));
     last_graphics_readback = 0;
     (void)memset(&last_runtime, 0, sizeof(last_runtime));
@@ -932,6 +941,11 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         goto cleanup;
     }
     miga80_host_drawing_backend(drawing, c2p_backend);
+    if (!miga80_host_music_create(ast, &last_drawing_context, &run_events.music,
+                                  &music, error_status, error_capacity)) {
+        failure = "music_setup";
+        goto cleanup;
+    }
     {
         unsigned int value;
         int animated = 0;
@@ -953,6 +967,8 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     last_drawing_context.layer_handler = (uint32_t)(uintptr_t)miga80_runtime_layer;
     last_drawing_context.line_start_handler = (uint32_t)(uintptr_t)miga80_runtime_line_start;
     last_drawing_context.line_end_handler = (uint32_t)(uintptr_t)miga80_runtime_line_end;
+    last_drawing_context.tri_middle_handler = (uint32_t)(uintptr_t)miga80_runtime_tri_middle;
+    last_drawing_context.tri_end_handler = (uint32_t)(uintptr_t)miga80_runtime_tri_end;
     last_runtime.fault_handler = (uint32_t)(uintptr_t)miga80_runtime_fault;
     last_runtime.pset_handler = (uint32_t)(uintptr_t)(test_stalled_service
                                     ? miga80_runtime_test_stall
@@ -976,7 +992,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
                 goto cleanup;
             }
         }
-        events.signals = run_events.drawing.signals | run_events.input_test.signals;
+        events.signals = run_events.drawing.signals | run_events.input_test.signals | run_events.music.signals;
         events.service = service_run_events;
         events.data = &run_events;
         supervised = miga80_supervise_generated(
@@ -996,6 +1012,8 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     } else {
         (void)miga80_execute_generated((APTR)code, (APTR)&last_runtime);
     }
+    miga80_host_music_destroy(music, &last_music);
+    music = NULL;
     if (!region_has_value(runtime_stack, DEMO_STACK_GUARD_BYTES,
                            DEMO_STACK_LOWER_GUARD) ||
         !region_has_value(runtime_stack + DEMO_STACK_GUARD_BYTES +
@@ -1048,6 +1066,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     success = 1;
 
 cleanup:
+    miga80_host_music_destroy(music, &last_music);
     if (drawing != NULL) {
         const struct miga80_draw_surface *surface;
         miga80_host_drawing_finish(drawing);
@@ -1058,6 +1077,7 @@ cleanup:
         last_planar_checksum = miga80_source_view_checksum(surface->planes[0],
                                                           4U * MIGA80_DRAW_PLANE_BYTES);
         last_planar_lines = miga80_host_drawing_lines(drawing);
+        last_planar_triangles = miga80_host_drawing_triangles(drawing);
         miga80_host_drawing_destroy(drawing);
     }
     last_failure = success ? NULL : failure;
@@ -1440,10 +1460,12 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
 #define BROWSER_CLICK(x, y, seconds, micros) \
     ui_event(&ui, screen, chunky, NULL, IDCMP_MOUSEBUTTONS, SELECTDOWN, 0U, (x), (y), (seconds), (micros))
     BROWSER_CHECK("scan_demos", miga80_file_picker_scan(&ui.picker, "SYS:demos") &&
-        ui.picker.count == 4 && strcmp(ui.picker.entries[0].name, "cube-chunky.lua") == 0 &&
-        strcmp(ui.picker.entries[1].name, "cube.lua") == 0 &&
-        strcmp(ui.picker.entries[2].name, "default.lua") == 0 &&
-        strcmp(ui.picker.entries[3].name, "layers.lua") == 0);
+        ui.picker.count == 6 && strcmp(ui.picker.entries[0].name, "cube-chunky.lua") == 0 &&
+        strcmp(ui.picker.entries[1].name, "cube-solid-chunky.lua") == 0 &&
+        strcmp(ui.picker.entries[2].name, "cube-solid.lua") == 0 &&
+        strcmp(ui.picker.entries[3].name, "cube.lua") == 0 &&
+        strcmp(ui.picker.entries[4].name, "default.lua") == 0 &&
+        strcmp(ui.picker.entries[5].name, "layers.lua") == 0);
     ui.browsing = 1;
     BROWSER_CHECK("render_picker", ui_picker(&ui, screen, chunky) && verify_source_view(screen, chunky));
     BROWSER_CHECK("single_click", BROWSER_CLICK(40, 44, 10U, 0U) == 0 &&
@@ -1451,10 +1473,10 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     BROWSER_CHECK("different_row_not_double_click", BROWSER_CLICK(40, 60, 10U, 100000U) == 0 &&
         ui.browsing && ui.picker.selected == 1);
     BROWSER_CHECK("double_click_load", BROWSER_CLICK(40, 60, 10U, 200000U) == 0 &&
-        !ui.browsing && strcmp(ui.source_path, "SYS:demos/cube.lua") == 0 &&
+        !ui.browsing && strcmp(ui.source_path, "SYS:demos/cube-solid-chunky.lua") == 0 &&
         ui.metrics.source_checksum != metrics->source_checksum && verify_source_view(screen, chunky));
     /* Every shipped demo loads through the real dispatcher; loading never runs it. */
-    for (i = 0; i < 4; ++i) {
+    for (i = 0; i < 6; ++i) {
         BROWSER_CHECK("f2_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
         BROWSER_CHECK("single_select", BROWSER_CLICK(40, (WORD)(44 + i * 16), 20U + (ULONG)i, 0U) == 0 && ui.browsing);
         BROWSER_CHECK("return_or_open_load",
@@ -1531,7 +1553,7 @@ static int write_browser_report(const char *path, int passed)
     written = write_text(output, "miga80_browser_report=1\n") &&
         (passed ? write_text(output,
             "sys_demos_scan_sort=pass\nmouse_select_double_click=pass\n"
-            "all_four_demos_load=pass\nloaded_source_f5=pass\nresult_escape=pass\n"
+            "all_six_demos_load=pass\nloaded_source_f5=pass\nresult_escape=pass\n"
             "f2_mouse_reopen=pass\nfolders_filter_pagination=pass\n"
             "invalid_missing_large_preserve_source=pass\nempty_directory=pass\n"
             "parent_sys_root=pass\ncancel_preserves_source=pass\n"
@@ -1952,7 +1974,7 @@ static int write_stop_report(const char *path, int passed)
 }
 
 static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
-    const struct Miga80SourceViewMetrics *metrics, int pixel)
+    const struct Miga80SourceViewMetrics *metrics, int pixel, int solid)
 {
     char *source = AllocMem(DEMO_SOURCE_CAPACITY + 1U, MEMF_PUBLIC);
     ULONG baseline = 0U;
@@ -1960,12 +1982,18 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
     int success = 0;
     if (source == NULL) { return 0; }
     (void)strcpy(source, source_buffer);
-    test_escape_delay = pixel ? 6000000U : 500000U;
+    if (solid) {
+        workflow_failure = miga80_host_music_selftest();
+        if (workflow_failure != NULL) { goto done; }
+    }
+    test_escape_delay = pixel ? 6000000U : solid ? 2000000U : 500000U;
     /* Stop after several displayed frames, then repeat without resource growth. */
     for (round = 0U; round < 3U; ++round) {
         workflow_failure = "cube_escape";
         if (!stop_case(screen, chunky, source, 1, 0, NULL) ||
             last_animation_frames < 2U) { goto done; }
+        if (solid && (last_music.starts != 1U || last_music.ticks < 50U ||
+            !miga80_intro_audio_available())) { workflow_failure = "cube_music_escape";goto done; }
         if (round == 0U) { baseline = AvailMem(MEMF_PUBLIC); }
         else if (AvailMem(MEMF_PUBLIC) < baseline) {
             workflow_failure = "cube_stop_memory_growth"; goto done;
@@ -1977,7 +2005,9 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
         workflow_failure = "cube_native";
         if (workflow_key(screen, chunky, metrics, NULL, &state, DEMO_RAWKEY_F5, 0U) != 0 ||
             state != DEMO_STATE_RESULT || last_animation_frames < 2U ||
-            last_planar_lines != (pixel ? 0U : last_animation_frames * 12U) ||
+            last_planar_lines != (pixel || solid ? 0U : last_animation_frames * 12U) ||
+            (solid && !pixel && (last_planar_triangles < last_animation_frames * 2U ||
+                                last_planar_triangles > last_animation_frames * 6U)) ||
             (pixel && (!last_graphics_readback ||
                 last_framebuffer_checksum == UINT32_C(0x5e509dc5) ||
                 last_planar_checksum != UINT32_C(0xefb69dc5))) ||
@@ -1985,6 +2015,9 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
             !verify_display_palette()) { goto done; }
         if (pixel && (last_c2p.calls != last_animation_frames ||
             last_c2p.frequency == 0U || last_c2p.minimum == 0U)) { goto done; }
+        if (solid && (last_music.starts != 1U || last_music.ticks < 490U || last_music.ticks > 550U ||
+            last_music.position < 80U || last_music.position > 92U || last_music.dma_seen != 15U ||
+            !miga80_intro_audio_available())) { workflow_failure = "cube_music_timing";goto done; }
         cube_samples[round].frames = last_animation_frames;
         cube_samples[round].elapsed = last_animation_elapsed;
         cube_samples[round].c2p = last_c2p;
@@ -2005,7 +2038,7 @@ done:
     return success;
 }
 
-static int write_cube_report(const char *path, int success, int pixel)
+static int write_cube_report(const char *path, int success, int pixel, int solid)
 {
     BPTR output = Open((STRPTR)path, MODE_NEWFILE);
     int written;
@@ -2030,13 +2063,20 @@ static int write_cube_report(const char *path, int success, int pixel)
             }
         }
     }
+    if (solid) {
+        written = written && write_text(output, "music_ticks=") && write_decimal(output, last_music.ticks) &&
+            write_text(output, "\nmusic_position=") && write_decimal(output, last_music.position) &&
+            write_text(output, "\nmusic_dma_seen=") && write_decimal(output, last_music.dma_seen) &&
+            write_text(output, "\nmusic_starts=") && write_decimal(output, last_music.starts) &&
+            write_text(output, "\n");
+    }
     written = written &&
         write_text(output, "frames=") && write_decimal(output, last_animation_frames) &&
         write_text(output, "\nelapsed_q16=") && write_decimal(output, last_animation_elapsed) &&
         (success ? (write_text(output, "\nlua_native=pass\ndouble_buffer=pass\n") &&
             write_text(output, pixel
                 ? "cpu_drawing=pass\npixel_pf1=pass\nplanar_empty=pass\nc2p_readback=pass\n"
-                : "blitter_edges=pass\n") && write_text(output,
+                : solid ? "blitter_filled_triangles=pass\n" : "blitter_edges=pass\n") && write_text(output,
             "clock_ten_seconds=pass\nescape_animation=pass\nreplay=pass\nmemory_no_growth=pass\n"
             "source_return=pass\nctrl_q_exit=pass\n"
             "hosted_cleanup=pass\nresult=pass\n")) :
@@ -2178,8 +2218,11 @@ int main(int argc, char **argv)
     const int browse = argc == 1 || (argc > 3 && strcmp(argv[3], "BROWSE") == 0);
     const int introtest = argc > 3 && strcmp(argv[3], "INTROTEST") == 0;
     const int browsertest = argc > 3 && strcmp(argv[3], "BROWSERTEST") == 0;
-    const int cubepixeltest = argc > 3 && strcmp(argv[3], "CUBEPIXELTEST") == 0;
-    const int cubetest = cubepixeltest || (argc > 3 && strcmp(argv[3], "CUBETEST") == 0);
+    const int solidtest = argc > 3 && (strcmp(argv[3], "SOLIDTEST") == 0 ||
+                                           strcmp(argv[3], "SOLIDPIXELTEST") == 0);
+    const int cubepixeltest = argc > 3 && (strcmp(argv[3], "CUBEPIXELTEST") == 0 ||
+                                         strcmp(argv[3], "SOLIDPIXELTEST") == 0);
+    const int cubetest = solidtest || cubepixeltest || (argc > 3 && strcmp(argv[3], "CUBETEST") == 0);
     const int cube = argc > 3 && strcmp(argv[3], "CUBE") == 0;
     const int selftest = argc > 3 && strcmp(argv[3], "SELFTEST") == 0;
     const int graphicstest = argc > 3 && strcmp(argv[3], "GRAPHICSTEST") == 0;
@@ -2353,7 +2396,7 @@ int main(int argc, char **argv)
     } else if (browsertest) {
         success = run_browser_regression(screen, chunky, &metrics);
     } else if (cubetest) {
-        success = run_cube_regression(screen, chunky, &metrics, cubepixeltest);
+        success = run_cube_regression(screen, chunky, &metrics, cubepixeltest, solidtest);
     } else if (cube) {
         char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
         const int completed = compile_and_run(screen, chunky, &metrics, report_path,
@@ -2425,6 +2468,6 @@ cleanup:
     }
     if (introtest && !write_intro_report(report_path, success)) { success = 0; }
     if (browsertest && !write_browser_report(report_path, success)) { success = 0; }
-    if (cubetest && !write_cube_report(report_path, success, cubepixeltest)) { success = 0; }
+    if (cubetest && !write_cube_report(report_path, success, cubepixeltest, solidtest)) { success = 0; }
     return success ? RETURN_OK : RETURN_FAIL;
 }

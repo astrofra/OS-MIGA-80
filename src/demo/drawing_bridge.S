@@ -82,3 +82,21 @@ _miga80_runtime_time:
         jsr _miga80_draw_time
         addq.l #4,%a7
         rts
+
+        .globl _miga80_runtime_tri_middle
+_miga80_runtime_tri_middle:
+        move.l %d1,-(%a7)
+        move.l %d0,-(%a7)
+        move.l MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET(%a5),-(%a7)
+        jsr _miga80_draw_tri_middle
+        lea 12(%a7),%a7
+        rts
+
+        .globl _miga80_runtime_tri_end
+_miga80_runtime_tri_end:
+        move.l %d1,-(%a7)
+        move.l %d0,-(%a7)
+        move.l MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET(%a5),-(%a7)
+        jsr _miga80_draw_tri_end
+        lea 12(%a7),%a7
+        rts

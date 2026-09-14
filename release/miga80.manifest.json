@@ -3,7 +3,7 @@
   "edition": "development preview",
   "adf": "miga80.adf",
   "adf_bytes": 901120,
-  "adf_sha256": "59765b3fcafd98e97f982d8ef8a317cd2e2595f72993030161f12768d581eae5",
+  "adf_sha256": "f785995b13c48bbf92b13085916efa038f16a7f8fd2159825f354be8a28067bc",
   "filesystem": "OFS",
   "volume": "MIGA80",
   "startup": "centered glitch logo + procedural jingle, then SYS:demos file selector",
@@ -17,8 +17,8 @@
   "files": {
     "MIGA80": {
       "source": "build/amiga/source-view/miga80",
-      "bytes": 138228,
-      "sha256": "271cd77dbe76055f86d8e5efd94b53e16c2429c6ba3d0d0ba60c7849493d8a18"
+      "bytes": 166440,
+      "sha256": "ac15160c97331102f93db31da5e8b2602fde82f31982fca50efe3ccb3bbe351b"
     },
     "S/Startup-Sequence": {
       "source": "assets/demo/Startup-Browser",
@@ -32,13 +32,23 @@
     },
     "README.TXT": {
       "source": "assets/demo/README.TXT",
-      "bytes": 5138,
-      "sha256": "d64e9e83e8937cf6adf5bbac8174838b77b3bce86a365bb7ded6fadc8139c660"
+      "bytes": 7139,
+      "sha256": "5bbd30868712a7a30d03de4f69cbfb6b5d55abfc5c552da36d8f710a6f73d524"
     },
     "LICENSE.TXT": {
       "source": "LICENSE",
       "bytes": 1074,
       "sha256": "51ae3876c9133cd8f80139f7e063067fadca0fc571e6550c706fdeca1dacdf31"
+    },
+    "PTPLAYER.TXT": {
+      "source": "third_party/ptplayer/LICENSE",
+      "bytes": 1211,
+      "sha256": "60d2c28d19d2bdf7bbaa59829e7a595234265e8111a01ccb74d25d6c4d2d013a"
+    },
+    "mods/93_10_12_A_SYNTH_1.mod": {
+      "source": "works/mods/93_10_12_A_SYNTH_1.mod",
+      "bytes": 20092,
+      "sha256": "68f436969156cb42452d9c839a484702bfa5a29dc70db583df564d148fca39e5"
     },
     "KALMS.TXT": {
       "source": "third_party/kalms-c2p/readme.txt",
@@ -49,6 +59,16 @@
       "source": "assets/demo/cube-chunky.lua",
       "bytes": 948,
       "sha256": "642f4fc0745432f34a2597131ba5a6f8878b5c7e9195646fe181effa094519a3"
+    },
+    "demos/cube-solid-chunky.lua": {
+      "source": "assets/demo/cube-solid-chunky.lua",
+      "bytes": 1145,
+      "sha256": "7fa5eea4448feeb507a8095d8fe1eb72d5b0130adfcf7d3dc9986eb39ef68fc1"
+    },
+    "demos/cube-solid.lua": {
+      "source": "assets/demo/cube-solid.lua",
+      "bytes": 1146,
+      "sha256": "b724742bf9e52605107163a4960d1c4b96bb2dc20d547e6e371d8e960d01e082"
     },
     "demos/cube.lua": {
       "source": "assets/demo/cube.lua",
@@ -67,22 +87,27 @@
     }
   },
   "filesystem_listing": [
-    "MIGA80                                           VOLUME  --------  14.09.2026 09:20:26.00  DOS0:ofs #512",
-    "  DATA                                              DIR  ----rwed  14.09.2026 09:20:26.00  ",
-    "    FONT4X8.BIN                                     780  ----rwed  14.09.2026 09:20:26.00  ",
-    "  demos                                             DIR  ----rwed  14.09.2026 09:20:26.00  ",
-    "    cube-chunky.lua                                 948  ----rwed  14.09.2026 09:20:26.00  ",
-    "    cube.lua                                        949  ----rwed  14.09.2026 09:20:26.00  ",
-    "    default.lua                                     643  ----rwed  14.09.2026 09:20:26.00  ",
-    "    layers.lua                                      406  ----rwed  14.09.2026 09:20:26.00  ",
-    "  KALMS.TXT                                        2470  ----rwed  14.09.2026 09:20:26.00  ",
-    "  LICENSE.TXT                                      1074  ----rwed  14.09.2026 09:20:26.00  ",
-    "  MIGA80                                         138228  ----rwed  14.09.2026 09:20:26.00  ",
-    "  README.TXT                                       5138  ----rwed  14.09.2026 09:20:26.00  ",
-    "  S                                                 DIR  ----rwed  14.09.2026 09:20:26.00  ",
-    "    Startup-Sequence                                 62  ----rwed  14.09.2026 09:20:26.00  ",
-    "sum:           331  165Ki        169472",
-    "data:          314  157Ki        160768  94.86%",
-    "fs:             17  8.5Ki          8704   5.14%"
+    "MIGA80                                           VOLUME  --------  14.09.2026 16:29:08.00  DOS0:ofs #512",
+    "  DATA                                              DIR  ----rwed  14.09.2026 16:29:08.00  ",
+    "    FONT4X8.BIN                                     780  ----rwed  14.09.2026 16:29:08.00  ",
+    "  demos                                             DIR  ----rwed  14.09.2026 16:29:08.00  ",
+    "    cube-chunky.lua                                 948  ----rwed  14.09.2026 16:29:08.00  ",
+    "    cube-solid-chunky.lua                          1145  ----rwed  14.09.2026 16:29:08.00  ",
+    "    cube-solid.lua                                 1146  ----rwed  14.09.2026 16:29:08.00  ",
+    "    cube.lua                                        949  ----rwed  14.09.2026 16:29:08.00  ",
+    "    default.lua                                     643  ----rwed  14.09.2026 16:29:08.00  ",
+    "    layers.lua                                      406  ----rwed  14.09.2026 16:29:08.00  ",
+    "  KALMS.TXT                                        2470  ----rwed  14.09.2026 16:29:08.00  ",
+    "  LICENSE.TXT                                      1074  ----rwed  14.09.2026 16:29:08.00  ",
+    "  MIGA80                                         166440  ----rwed  14.09.2026 16:29:08.00  ",
+    "  mods                                              DIR  ----rwed  14.09.2026 16:29:08.00  ",
+    "    93_10_12_A_SYNTH_1.mod                        20092  ----rwed  14.09.2026 16:29:08.00  ",
+    "  PTPLAYER.TXT                                     1211  ----rwed  14.09.2026 16:29:08.00  ",
+    "  README.TXT                                       7139  ----rwed  14.09.2026 16:29:08.00  ",
+    "  S                                                 DIR  ----rwed  14.09.2026 16:29:08.00  ",
+    "    Startup-Sequence                                 62  ----rwed  14.09.2026 16:29:08.00  ",
+    "sum:           450  225Ki        230400",
+    "data:          427  213Ki        218624  94.89%",
+    "fs:             23   11Ki         11776   5.11%"
   ]
 }

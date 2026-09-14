@@ -3,7 +3,7 @@
 Fantasy OS for the Amiga 1200
 
 The reference distribution is [release/miga80.adf](release/miga80.adf), a
-bootable development preview containing all four Lua demos in `SYS:demos`.
+bootable development preview containing all six Lua demos in `SYS:demos`.
 Startup shows the centered project logo with a brief glitch effect and an
 original “A–MI–GA” jingle synthesized on the 68000 and played through Paula.
 ESC skips the intro. See [boot intro and tests](documentation/MIGA-80-boot-intro.md).
@@ -12,6 +12,9 @@ navigation and pagination. F2 / **OPEN** reopens it, F5 runs the source, ESC
 stops or returns, and CTRL-Q exits. Build with `gmake release`; validate with
 `gmake release-fs-uae`. The ADF and payload manifest are kept in `release/`
 for version control. See [distribution instructions](release/README.md).
+The [solid cube demos](documentation/MIGA-80-solid-cube.md) add flat face lighting,
+direct blitter area fill and a chunky ASM span filler. Both now play the supplied
+ProTracker module through Paula and CIA interrupts; see the [Lua music API](documentation/MIGA-80-mod-playback.md).
 
 The first hosted AmigaOS bootstrap can be built and tested from macOS with:
 
@@ -78,13 +81,13 @@ gmake compiler-amiga-test
 
 The implemented subset accepts one explicitly annotated typed function with up
 to three scalar `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`symbol` parameters, two
-`string` parameters, and 16 explicitly typed locals,
+`string` parameters, and 24 explicitly typed locals,
 initialized declarations, reassignment, one final return, arithmetic, all six
 comparisons (`!=` aliases `~=`), nested `if`/`then`/`else`/`end`, and nested
 `while`/`do`/`end` loops with loop-carried values, `break`, and `continue`.
 It also accepts an explicit `void` result and the statement-only
 `pset(i32, i32, u8)`, `layer(PLANAR/PIXEL)`, and
-`line(i32, i32, i32, i32, u8)`, `cls(u8)` and `flip()` runtime intrinsics.
+`line(i32, i32, i32, i32, u8)`, `tri(x0,y0,x1,y1,x2,y2,color)`, `cls(u8)` and `flip()` runtime intrinsics.
 `sin(fix)`, `cos(fix)` and `time()` return `fix` values.
 Signed integer `/` truncates toward zero, unsigned integer `/` uses `DIVU.L`, and
 statement-only `/=` follows the target numeric type; all use controlled

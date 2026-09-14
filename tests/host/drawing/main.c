@@ -8,6 +8,8 @@
 #include "compiler/backend_m68k/backend.h"
 #include "compiler/backend_m68k/encoder.h"
 
+void triangle_tests(void);
+
 static uint8_t pixels[65536];
 static uint8_t planes[32768];
 static uint8_t expected[65536];
@@ -56,6 +58,18 @@ static int oracle_line(void *context, uint32_t x0, uint32_t y0,
     }
     miga80_draw_line_start(target, x0, y0, color);
     miga80_draw_line_end(target, x1, y1);
+    return 1;
+}
+
+static int oracle_tri(void *context, uint32_t x0, uint32_t y0, uint32_t x1,
+    uint32_t y1, uint32_t x2, uint32_t y2, uint32_t color)
+{
+    trace_value(40U); trace_value(x0); trace_value(y0); trace_value(color);
+    trace_value(72U); trace_value(x1); trace_value(y1);
+    trace_value(76U); trace_value(x2); trace_value(y2);
+    miga80_draw_line_start(context, x0, y0, color);
+    miga80_draw_tri_middle(context, x1, y1);
+    miga80_draw_tri_end(context, x2, y2);
     return 1;
 }
 
@@ -142,7 +156,11 @@ static void rejection_tests(void)
         "function main(): void line(1, 2, 3, 4) end",
         "function main(): void line(1, 2, 3, 4, 5, 6) end",
         "function main(): void line(true, 2, 3, 4, 5) end",
-        "function main(): void line(1, 2, 3, 4, true) end"
+        "function main(): void line(1, 2, 3, 4, true) end",
+        "function main(): void tri(1,2,3,4,5,6) end",
+        "function main(): void tri(1,2,3,4,5,6,7,8) end",
+        "function main(): void tri(1,2,3,true,5,6,7) end",
+        "function main(): void tri(1,2,3,4,5,6,true) end"
     };
     static const char valid[] =
         "function main(): void layer(PLANAR) line(1, 2, 3, 4, 5) end";
@@ -194,7 +212,7 @@ int main(int argc, char **argv)
     static struct miga80_ir_function ir;
     static struct miga80_value_function value;
     struct miga80_diagnostic diagnostic;
-    struct miga80_ir_runtime runtime = {&surface, oracle_pset, oracle_layer, oracle_line, NULL, NULL, NULL};
+    struct miga80_ir_runtime runtime = {&surface, oracle_pset, oracle_layer, oracle_line, NULL, NULL, NULL, oracle_tri, NULL, NULL, NULL, NULL};
     uint8_t code[4096];
     char source[4097];
     size_t size, code_size, bound;
@@ -202,6 +220,7 @@ int main(int argc, char **argv)
     unsigned int mode;
     FILE *input;
     assert(argc == 3);
+    triangle_tests();
     primitive_tests();
     rejection_tests();
     input = fopen(argv[1], "rb");

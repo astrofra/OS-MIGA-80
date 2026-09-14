@@ -11,12 +11,17 @@ Opening another file, F5 replay and ESC return never restart it.
 ESC or a left click skips the intro; CTRL-Q exits. NOSPLASH is available as
 a CLI option after the report path and optional BROWSE mode.
 
-The disk includes all four Lua demos:
+The disk includes all six Lua demos:
 
   default.lua       Mandelbrot fractal, chunky pixels.
   layers.lua        Lines and pixels on both playfields.
   cube.lua          Ten-second 3D wireframe cube, direct blitter lines.
   cube-chunky.lua   Same cube, CPU lines and Kalms C2P.
+  cube-solid.lua    Ten-second solid cube with flat lighting, blitter.
+  cube-solid-chunky.lua  Same solid cube, ASM spans and Kalms C2P.
+
+Both solid cubes play mods/93_10_12_A_SYNTH_1.mod via Paula and CIA timers.
+The music stops when the demo ends or ESC is pressed.
 
 OPENING A DEMO
 
@@ -66,6 +71,14 @@ and line(x0,y0,x1,y1,color) accept coordinates 0..255 and colors 0..15.
 Lines are clipped; out-of-range pixels and colors above 15 are ignored.
 Zero on PIXEL reveals PLANAR. Zero on PLANAR is the backdrop color.
 
+tri(x0,y0,x1,y1,x2,y2,color) fills a triangle on the selected layer.
+Coordinates are i32 values in -32768..32767, clipped to the screen; invalid
+coordinates/colors and degenerate triangles draw nothing. Shared edges use
+pixel-center coverage with a top-left rule, avoiding cracks or double fill.
+PLANAR triangles use a Chip RAM mask, direct blitter area fill and four-plane
+color writes. PIXEL triangles use an integer edge walker and ASM span fill.
+The runtime preallocates an 8 KiB mask and about 1 KiB of edge scratch.
+
 PIXEL lines use CPU Bresenham. PLANAR lines use direct blitter registers.
 The owner takes the blitter for batches of at most 16 commands, suspends
 task switching for each batch, waits for completion, and returns it.
@@ -78,7 +91,9 @@ flip does not clear or copy it. time() returns fix seconds since the first
 published frame, or zero before it. Double buffering uses another 128 KiB
 of Chip RAM and preserves the source screen. ESC works during buffer waits.
 
-Both cubes rotate on X and Y with depth shading for ten seconds. The chunky
+The wireframe cubes use depth shading; the solid cubes use face normals for
+flat lighting and hidden-face rejection. All rotate on X and Y for ten
+seconds. Four trig values are calculated once per frame. Each chunky
 variant converts the entire framebuffer to PF1 at each flip. Kalms is the
 default C2P, selected on 2026-09-14. Physical A1200 timings remain pending;
 FS-UAE comparisons are documented in the source repository.
@@ -87,6 +102,22 @@ The older source-view and cube autoboot ADFs under build/distribution are
 development/test variants. Their compatibility paths remain DATA/DEFAULT.LUA,
 DATA/LAYERS.LUA and DATA/CUBE.LUA. release/miga80.adf is the reference disk.
 
+MOD MUSIC
+
+music_play("SYS:mods/93_10_12_A_SYNTH_1.mod") starts or restarts the song.
+Paths must be string literals; files are preloaded before native execution.
+music_stop() stops it. music_position() returns the next row as order*64+row,
+zero-based, or -1 when stopped. music_mute(u8) uses bits 0..3 to mute channels;
+0 restores them, 15 mutes all without stopping the song's clock.
+
+Standard four-channel, 31-sample MODs (M.K., M!K!, 4CHN), at most 256 KiB each.
+The combined original/replay buffers are limited to 512 KiB. Invalid files,
+out-of-range loops and effect 8 panning are rejected before playback.
+The runtime reserves audio.device and CIA-B resources, then drives Paula
+registers directly in the interrupt replayer. A busy resource gives an error.
+No audio processing depends on the frame rate. End, ESC and faults stop DMA
+and release all music resources before returning to the editor.
+
 CREDITS
 
 MIGA-80 and the project 4x8 bitmap font: see LICENSE.TXT.
@@ -94,3 +125,7 @@ Kalms C2P by Mikael Kalms, Public Domain, adapted from c2p1x1_4_c5_bm.s.
 Original notice: KALMS.TXT. Source: https://github.com/Kalmalyzer/kalms-c2p
 The repository preserves the original source in third_party/kalms-c2p.
 No Kickstart ROM or Workbench files are included on this disk.
+
+ptplayer 6.4 by Frank Wille (Public Domain): PTPLAYER.TXT.
+Source: https://aminet.net/package/mus/play/ptplayer
+Module a_synth_1: internal credit "by erk 12/10/93".

@@ -428,12 +428,13 @@ COMPILER_CALL_MUSASHI_EXPECTED := \
 BOOT_LOGO_HEADER := build/generated/boot_logo_data.h
 BOOT_JINGLE_OBJECT := build/amiga/source-view/boot_jingle.o
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
-MIGA80_DEMO_SOURCE := src/demo/intro.c src/demo/intro_effect.c src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
-	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c \
+PTPLAYER_OBJECT := $(AMIGA_BUILD_DIR)/source-view/ptplayer.o
+MIGA80_DEMO_SOURCE := src/demo/music_host.c src/audio/mod.c src/demo/intro.c src/demo/intro_effect.c src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
+	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/triangle.c src/graphics/c2p4_reference.c \
 	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
-MIGA80_DEMO_HEADERS := src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
+MIGA80_DEMO_HEADERS := src/demo/music_host.h src/audio/mod.h src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
 	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
-MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S \
+MIGA80_DEMO_RUNTIME_SOURCE := src/demo/music_bridge.S src/demo/runtime_guarded.S src/demo/drawing_bridge.S src/graphics/triangle_m68k.S \
 	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
 MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \
 	$(COMPILER_FRONTEND_SOURCE) $(COMPILER_IR_SOURCE) \
@@ -683,12 +684,12 @@ miga80-demo-adf-fs-uae-direct: $(MIGA80_DEMO_ADF)
 DRAWING_TEST_PROGRAM := $(HOST_BUILD_DIR)/drawing/test
 DRAWING_TEST_HEADER := build/generated/drawing_test_data.h
 
-$(DRAWING_TEST_PROGRAM): tests/host/drawing/main.c src/graphics/drawing.c \
+$(DRAWING_TEST_PROGRAM): tests/host/drawing/main.c tests/host/drawing/triangles.c src/graphics/drawing.c src/graphics/triangle.c \
         src/graphics/drawing.h $(COMPILER_SOURCES) $(COMPILER_HEADERS) \
         $(COMPILER_ENCODER_SOURCE) $(COMPILER_ENCODER_HEADER) compiler/abi/runtime.h Makefile
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) \
-		-fsanitize=address,undefined tests/host/drawing/main.c src/graphics/drawing.c \
+		-fsanitize=address,undefined tests/host/drawing/main.c tests/host/drawing/triangles.c src/graphics/drawing.c src/graphics/triangle.c \
 		$(COMPILER_SOURCES) -o $@
 
 $(DRAWING_TEST_HEADER): $(DRAWING_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
@@ -708,7 +709,14 @@ miga80-demo-adf-fs-uae-graphics: $(MIGA80_DEMO_ADF)
 
 miga80-demo: $(MIGA80_DEMO_PROGRAM)
 
-$(MIGA80_DEMO_PROGRAM): $(BOOT_LOGO_HEADER) $(BOOT_JINGLE_OBJECT) $(DRAWING_TEST_HEADER) $(MIGA80_DEMO_SOURCE) $(MIGA80_DEMO_HEADERS) $(SOURCE_VIEW_SOURCE) \
+$(AMIGA_BUILD_DIR)/source-view/ptplayer.inc: third_party/ptplayer/ptplayer.asm scripts/prepare-ptplayer.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) scripts/prepare-ptplayer.py $@
+
+$(PTPLAYER_OBJECT): src/audio/ptplayer_host.asm $(AMIGA_BUILD_DIR)/source-view/ptplayer.inc
+	$(MIGA80_TOOLCHAIN_PREFIX)/bin/vasmm68k_mot -quiet -Fhunk -m68000 -o $@ $<
+
+$(MIGA80_DEMO_PROGRAM): $(PTPLAYER_OBJECT) $(BOOT_LOGO_HEADER) $(BOOT_JINGLE_OBJECT) $(DRAWING_TEST_HEADER) $(MIGA80_DEMO_SOURCE) $(MIGA80_DEMO_HEADERS) $(SOURCE_VIEW_SOURCE) \
 		$(MIGA80_DEMO_RUNTIME_SOURCE) $(MIGA80_DEMO_COMPILER_SOURCES) \
 		$(COMPILER_ABI_HEADER) $(COMPILER_FRONTEND_HEADER) \
 		$(COMPILER_IR_HEADER) $(COMPILER_VALUE_IR_HEADER) \
@@ -722,7 +730,7 @@ $(MIGA80_DEMO_PROGRAM): $(BOOT_LOGO_HEADER) $(BOOT_JINGLE_OBJECT) $(DRAWING_TEST
 		-I$(FONT4X8_GENERATED_DIR) \
 		$(TARGET_CFLAGS) $(MIGA80_DEMO_SOURCE) $(SOURCE_VIEW_SOURCE) \
 		$(SOURCE_VIEW_PALETTE_SOURCE) $(C2P_REFERENCE_SOURCE) \
-		$(MIGA80_DEMO_COMPILER_SOURCES) $(MIGA80_DEMO_RUNTIME_SOURCE) $(BOOT_JINGLE_OBJECT) \
+		$(MIGA80_DEMO_COMPILER_SOURCES) $(MIGA80_DEMO_RUNTIME_SOURCE) $(BOOT_JINGLE_OBJECT) $(PTPLAYER_OBJECT) \
 		-Wl,--gc-sections -Wl,-Map,$(MIGA80_DEMO_MAP) -o $@ $(TARGET_RUNTIME)
 
 miga80-demo-inspect: $(MIGA80_DEMO_PROGRAM)
@@ -1370,7 +1378,7 @@ exclusive-graphics-test-adf-fs-uae: $(EXCLUSIVE_GRAPHICS_TEST_ADF) \
 runtime-compare:
 	./scripts/compare-c-runtimes.sh
 
-check: intro-test c2p4-asm-test animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
+check: solid-cube-test triangle-asm-test intro-test c2p4-asm-test animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
@@ -1388,12 +1396,12 @@ clean:
 	rm -f $(STAGED_PROGRAM) $(STAGING_DIR)/fs-uae-smoke.out
 
 ANIMATION_TEST_PROGRAM := $(HOST_BUILD_DIR)/animation/test
-$(ANIMATION_TEST_PROGRAM): tests/host/animation/main.c src/graphics/drawing.c \
+$(ANIMATION_TEST_PROGRAM): tests/host/animation/main.c src/graphics/drawing.c src/graphics/triangle.c \
         src/graphics/drawing.h $(COMPILER_SOURCES) $(COMPILER_HEADERS) \
         $(COMPILER_ENCODER_SOURCE) $(COMPILER_ENCODER_HEADER) compiler/abi/runtime.h Makefile
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) \
-		-fsanitize=address,undefined tests/host/animation/main.c src/graphics/drawing.c \
+		-fsanitize=address,undefined tests/host/animation/main.c src/graphics/drawing.c src/graphics/triangle.c \
 		$(COMPILER_SOURCES) -lm -o $@
 
 .PHONY: animation-test
@@ -1474,7 +1482,7 @@ MIGA80_RELEASE_MANIFEST := release/miga80.manifest.json
 release: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIGA80_RELEASE_DEMOS) assets/demo \
         $(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Browser $(MIGA80_DEMO_README) \
-        LICENSE third_party/kalms-c2p/readme.txt scripts/build-miga80-release.py
+        LICENSE third_party/kalms-c2p/readme.txt third_party/ptplayer/LICENSE works/mods/93_10_12_A_SYNTH_1.mod scripts/build-miga80-release.py
 	$(PYTHON) scripts/build-miga80-release.py $(MIGA80_DEMO_PROGRAM) \
 		$(FONT4X8_GENERATED_BINARY) $(MIGA80_RELEASE_ADF)
 
@@ -1508,3 +1516,50 @@ intro-test: $(INTRO_HOST_PROGRAM)
 	$(INTRO_HOST_PROGRAM) $(REPORT_DIR)/intro >$(REPORT_DIR)/intro-host.txt
 	$(PYTHON) scripts/preview-boot-intro.py $(REPORT_DIR)/intro >>$(REPORT_DIR)/intro-host.txt
 	@cat $(REPORT_DIR)/intro-host.txt
+
+SOLID_CUBE_TEST_PROGRAM := $(HOST_BUILD_DIR)/solid-cube/test
+$(SOLID_CUBE_TEST_PROGRAM): tests/host/solid-cube/main.c src/graphics/drawing.c src/graphics/triangle.c \
+        src/graphics/drawing.h $(COMPILER_SOURCES) $(COMPILER_HEADERS) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) \
+		-fsanitize=address,undefined $< src/graphics/drawing.c src/graphics/triangle.c \
+		$(COMPILER_SOURCES) -lm -o $@
+
+.PHONY: solid-cube-test
+solid-cube-test: $(SOLID_CUBE_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(PYTHON) scripts/test-solid-cube.py $(SOLID_CUBE_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
+		$(TARGET_CC) $(TARGET_AS) $(TARGET_OBJCOPY) assets/demo/cube-solid.lua \
+		$(HOST_BUILD_DIR)/solid-cube PLANAR >$(REPORT_DIR)/solid-cube-host.txt
+	$(PYTHON) scripts/test-solid-cube.py $(SOLID_CUBE_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
+		$(TARGET_CC) $(TARGET_AS) $(TARGET_OBJCOPY) assets/demo/cube-solid-chunky.lua \
+		$(HOST_BUILD_DIR)/solid-cube-chunky PIXEL >$(REPORT_DIR)/solid-cube-chunky-host.txt
+	cmp $(HOST_BUILD_DIR)/solid-cube/frames.bin $(HOST_BUILD_DIR)/solid-cube-chunky/frames.bin
+	@cat $(REPORT_DIR)/solid-cube-host.txt $(REPORT_DIR)/solid-cube-chunky-host.txt
+
+.PHONY: solid-cube-fs-uae solid-cube-chunky-fs-uae
+solid-cube-fs-uae: release
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $(MIGA80_RELEASE_ADF) \
+		tests/smoke/source-view-adf/solid-expected.txt SOLIDTEST
+solid-cube-chunky-fs-uae: release
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=360 $(MIGA80_DEMO_ADF_TESTER) $(MIGA80_RELEASE_ADF) \
+		tests/smoke/source-view-adf/cube-chunky-expected.txt SOLIDPIXELTEST
+
+.PHONY: triangle-asm-test
+triangle-asm-test: $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(PYTHON) scripts/test-triangle-asm.py $(MIGA68K_TEST_PROGRAM) $(TARGET_CC) $(TARGET_OBJCOPY) >$(REPORT_DIR)/triangle-asm.txt
+	@cat $(REPORT_DIR)/triangle-asm.txt
+
+MUSIC_TEST_PROGRAM := $(HOST_BUILD_DIR)/music/test
+$(MUSIC_TEST_PROGRAM): tests/host/music/main.c src/audio/mod.c src/audio/mod.h $(COMPILER_SOURCES) $(COMPILER_HEADERS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) $(COMPILER_CPPFLAGS) $(HOST_CFLAGS) -fsanitize=address,undefined \
+		tests/host/music/main.c src/audio/mod.c $(COMPILER_SOURCES) -o $@
+.PHONY: music-test
+music-test: $(MUSIC_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(PYTHON) scripts/test-music.py $(MUSIC_TEST_PROGRAM) $(MIGA68K_TEST_PROGRAM) \
+		$(TARGET_CC) $(TARGET_AS) $(TARGET_OBJCOPY) >$(REPORT_DIR)/music-host.txt
+	@cat $(REPORT_DIR)/music-host.txt
+check: music-test

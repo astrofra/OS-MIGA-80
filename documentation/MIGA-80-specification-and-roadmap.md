@@ -1,5 +1,11 @@
 # MIGA-80 Product Requirements, Technical Specification, and Development Roadmap
 
+**2026-09-14 audio checkpoint:** the solid cubes now preload and play the supplied
+four-channel MOD using ptplayer 6.4, CIA interrupts and allocated Paula channels.
+Lua exposes `music_play`, `music_stop`, `music_position` and `music_mute`; ESC and
+normal completion stop DMA and return resources. The full effect corpus and
+physical-hardware gate remain open. See [MOD playback](MIGA-80-mod-playback.md).
+
 **2026-09-13 implementation checkpoint:** the hosted Lua workflow now exposes
 `layer(PLANAR/PIXEL)`, `pset`, and `line` on both AGA playfields. PLANAR lines use
 direct blitter registers in bounded owner batches; PIXEL lines use CPU
@@ -1386,6 +1392,12 @@ and line drawing, and synchronized double buffering. ESC during animation,
 F5 replay and resource cleanup are covered by the ADF regression. See
 [the cube checkpoint](MIGA-80-cube-animation.md). Physical A1200 feedback remains pending.
 
+The solid cube samples add two-axis rotation with flat face lighting and
+hidden-face rejection in Lua. `tri()` fills triangles through direct blitter
+area fill on PLANAR or integer scan conversion plus ASM spans on PIXEL;
+Kalms remains the chunky converter. Both ten-second samples are included on
+the reference disk. See [the solid cube checkpoint](MIGA-80-solid-cube.md).
+
 PIXEL uses the Kalms four-plane 68020 adaptation by default, selected by the
 project owner on 2026-09-14. The existing mask32 converter and scalar reference
 remain selectable for comparison. The same-ADF
@@ -1394,7 +1406,7 @@ replay, readback and cleanup for all three backends. See the
 [runtime C2P comparison](MIGA-80-c2p-runtime-comparison.md).
 
 A reference development-preview distribution now lives in `release/miga80.adf`.
-It packages all four Lua demos in `SYS:demos` and boots into a graphical
+It packages all six Lua demos in `SYS:demos` and boots into a graphical
 filesystem selector: mouse selection/double-click load, F2 reopening, folders,
 pagination, cancellation and transactional source validation. The source view
 remains read-only (30 lines, 64 columns); this is not the full Phase 1 shell or

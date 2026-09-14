@@ -12,6 +12,12 @@ ESC or a left click skips the intro; CTRL-Q exits.
 - `layers.lua`: PIXEL and PLANAR drawing.
 - `cube.lua`: rotating wireframe cube, hardware blitter, ten seconds.
 - `cube-chunky.lua`: the same cube with CPU lines and Kalms C2P.
+- `cube-solid.lua`: two-axis cube with lit solid faces, direct blitter fill, ten seconds.
+- `cube-solid-chunky.lua`: the same solid cube with ASM spans and Kalms C2P.
+
+Both solid cubes play `SYS:mods/93_10_12_A_SYNTH_1.mod` through the CIA-timed
+ptplayer replayer. Playback stops on completion or ESC. See the
+[Lua music API](../documentation/MIGA-80-mod-playback.md).
 
 Click to select; double-click to load. F5 runs the displayed source. ESC stops
 execution or returns to the source. F2 or **OPEN** reopens the selector.
@@ -30,6 +36,7 @@ Rebuild and validate from the repository root:
 gmake release
 gmake release-intro-fs-uae
 gmake release-fs-uae
+gmake solid-cube-fs-uae solid-cube-chunky-fs-uae
 ```
 
 The builder packages every `assets/demo/*.lua`, checks the OFS structure and

@@ -86,7 +86,7 @@ stops or returns to source. No physical latency/performance figure is claimed.
 IR retains one line call; value IR lowers it to two ordered effects:
 `line_start(x0,y0,color)` and `line_end(x1,y1)`. Both obey the existing maximum
 three-register native call ABI. Values needed after either call survive
-`D0-D2/A0-A1` clobbers. The optional drawing context is 72 bytes, retaining all
+`D0-D2/A0-A1` clobbers. The optional drawing context is 80 bytes, retaining all
 36 guarded-profile bytes at their existing offsets. See the
 [native ABI](MIGA-Lua-native-ABI-v0.md) for the added service entries.
 
@@ -117,7 +117,7 @@ O1 encodings are also byte-identical; O0's textual emitter omits fallthrough
 jumps that the direct baseline retains, so their comparison is semantic.
 
 The AGA `GRAPHICSTEST` runs the Lua fixture three times through F5, compares
-PIXEL checksum `003971a5` and PLANAR checksum `4235248a` with the host oracle,
+PIXEL checksum `18d74cc6` and PLANAR checksum `022d41fe` with the host oracle,
 checks 19 accepted hardware lines per run, and reads all 65,536 pixels from the
 eight-plane destination each time. It checks source return, Ctrl-Q, signal
 release, warmed free memory, and hosted cleanup. On source, result, and source
@@ -137,3 +137,8 @@ Reports: `build/reports/drawing-host.txt`,
 The animation extension adds `cls`, `flip`, `time`, `sin` and `cos`, with two
 complete AGA buffers. See [the Lua cube](MIGA-80-cube-animation.md) for publication
 and buffer-content semantics.
+
+Filled triangles, their bounded coordinate domain and exact shared-edge rule
+are documented with the [solid cube samples](MIGA-80-solid-cube.md). The graphics
+regression now also covers clipping, degenerate triangles, one-pixel spans and
+color-zero erasure on the real blitter and chunky ASM paths.

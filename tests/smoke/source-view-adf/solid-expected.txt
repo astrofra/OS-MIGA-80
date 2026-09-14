@@ -1,0 +1,12 @@
+miga80_cube_report=1
+lua_native=pass
+double_buffer=pass
+blitter_filled_triangles=pass
+clock_ten_seconds=pass
+escape_animation=pass
+replay=pass
+memory_no_growth=pass
+source_return=pass
+ctrl_q_exit=pass
+hosted_cleanup=pass
+result=pass

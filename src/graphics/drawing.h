@@ -14,6 +14,17 @@ struct miga80_draw_line {
     uint32_t color;
 };
 
+struct miga80_draw_triangle {
+    int32_t x0, y0, x1, y1, x2, y2;
+    uint32_t color;
+};
+
+/* Pixel-center coverage, left/top inclusive and right/bottom exclusive. */
+struct miga80_draw_spans {
+    int16_t left[256], right[256];
+    uint16_t top, bottom, min_x, max_x;
+};
+
 struct miga80_draw_surface {
     uint32_t layer; /* Offset zero is used by the native pset fast path. */
     uint32_t pixel_written; /* Native PIXEL pset writes offset four. */
@@ -27,7 +38,17 @@ struct miga80_draw_surface {
     void (*flip)(void *owner);
     uint32_t (*time)(void *owner);
     void *owner;
+    int32_t tri_x1, tri_y1;
+    void (*planar_tri)(void *owner, const struct miga80_draw_triangle *triangle);
+    struct miga80_draw_spans spans; /* Owner storage, never on the worker stack. */
 };
+
+int miga80_draw_triangle_spans(struct miga80_draw_spans *spans,
+    const struct miga80_draw_triangle *triangle);
+void miga80_draw_triangle(struct miga80_draw_surface *surface,
+    const struct miga80_draw_triangle *triangle);
+void miga80_draw_tri_middle(struct miga80_draw_surface *surface, uint32_t x, uint32_t y);
+void miga80_draw_tri_end(struct miga80_draw_surface *surface, uint32_t x, uint32_t y);
 
 void miga80_draw_clear(struct miga80_draw_surface *surface, uint32_t color);
 void miga80_draw_flip(struct miga80_draw_surface *surface);

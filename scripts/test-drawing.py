@@ -20,11 +20,11 @@ def main():
     values = dict(line.split('=') for line in report.splitlines())
     print(report, end='', flush=True)
     wrapper = ['.text', '.even', 'entry:']
-    for offset, count in ((4, 3), (36, 1), (40, 3), (44, 2)):
+    for offset, count in ((4, 3), (36, 1), (40, 3), (44, 2), (72, 2), (76, 2)):
         wrapper += [f' lea handler{offset}(%pc),%a0', f' move.l %a0,{offset}(%a5)']
     wrapper += [' move.l #1000000,12(%a5)', ' move.l #0x811c9dc5,64(%a5)',
                 ' bsr generated', ' move.l 64(%a5),%d0', ' rts']
-    for offset, count in ((4, 3), (36, 1), (40, 3), (44, 2)):
+    for offset, count in ((4, 3), (36, 1), (40, 3), (44, 2), (72, 2), (76, 2)):
         wrapper += [f'handler{offset}:', ' movem.l %d0-%d2,-(%sp)',
                     ' move.l 64(%a5),%d0', ' rol.l #5,%d0', f' eori.l #{offset},%d0']
         for arg in range(count):
@@ -49,8 +49,8 @@ def main():
             image = out / f'mode{mode}-{variant}-runtime.bin'
             run(cc, '-c', '-m68020', f'-DCODE_FILE="{code}"', str(source), '-o', str(obj))
             run(objcopy, '-O', 'binary', '-j', '.text', str(obj), str(image))
-            run(runner, '--case', str(image), f'drawing-mode{mode}-{variant}', '0', '0', '0',
-                '0x'+values['trace'])
+            run(runner, '--pset-case', str(image), f'drawing-mode{mode}-{variant}', '0', '0', '0',
+                '0x'+values['trace'], '0')
     header = root / 'build/generated/drawing_test_data.h'
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text('/* Generated from tests/runtime/layers.lua by test-drawing.py. */\n' +
