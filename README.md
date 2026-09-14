@@ -25,6 +25,11 @@ with direct blitter drawing, synchronized double buffering and a ten-second
 animation. Build its autoboot disk with `gmake miga80-cube-adf`; see
 [cube animation and runtime](documentation/MIGA-80-cube-animation.md).
 
+The chunky cube now uses our mask32 68020 C2P by default, with a selectable
+Kalms adaptation and scalar reference. `gmake miga80-cube-c2p-compare` runs
+the three backends on the same ADF; see the [comparison and measurements](documentation/MIGA-80-c2p-runtime-comparison.md).
+`gmake miga80-cube-chunky-kalms-adf` builds the Kalms autoboot variant.
+
 Run only the portable three-layer graphics oracle natively with:
 
 ```sh

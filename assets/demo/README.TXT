@@ -71,5 +71,20 @@ CHUNKY CUBE COMPARISON
 miga80-cube-chunky.adf boots the same cube using layer(PIXEL). On that disk,
 DATA/CUBE.LUA and DATA/DEFAULT.LUA contain the chunky variant. CPU Bresenham
 replaces blitter lines; flip converts the whole chunky frame to PF1. The
-current converter is the scalar C reference and is substantially slower.
+default converter now uses our mask32 68020 assembly.
 F5 replays, Esc stops and Ctrl-Q exits as usual.
+
+miga80-cube-chunky-kalms.adf boots the same Lua source with the Kalms C2P
+adaptation. Both converters are in the same executable. From the Shell:
+MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA RAM:CUBE.TXT CUBE C2P=KALMS
+Use C2P=MASK32 or C2P=REFERENCE for the other backends.
+
+FS-UAE PAL A1200 / 2 MiB Chip / no Fast, two runs per backend:
+reference C: 5 frames in 10.42 s, about 2526 ms per full C2P;
+our mask32: 40 frames in 10.16 s, about 179 ms per full C2P;
+Kalms adaptation: 83 frames in 10.02-10.10 s, about 49 ms per full C2P.
+These are emulator results; physical A1200 measurements remain pending.
+
+Kalms C2P by Mikael Kalms, Public Domain, adapted from c2p1x1_4_c5_bm.s.
+Original source and notice: https://github.com/Kalmalyzer/kalms-c2p
+The source repository preserves the upstream files in third_party/kalms-c2p.

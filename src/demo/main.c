@@ -93,6 +93,12 @@ static struct miga80_drawing_context last_drawing_context;
 static uint32_t last_planar_checksum;
 static ULONG last_planar_lines;
 static ULONG last_animation_frames, last_animation_elapsed;
+static enum miga80_c2p_backend c2p_backend = MIGA80_C2P_MASK32;
+static struct miga80_c2p_stats last_c2p;
+static struct {
+    ULONG frames, elapsed;
+    struct miga80_c2p_stats c2p;
+} cube_samples[2];
 static uint32_t last_framebuffer_checksum;
 static uint32_t execution_budget = DEMO_EXECUTION_BUDGET;
 static int force_runtime_fault;
@@ -231,7 +237,7 @@ static int write_text(BPTR output, const char *text)
     return write_bytes(output, text, text_length(text));
 }
 
-static int write_decimal(BPTR output, size_t value)
+static int write_decimal(BPTR output, uint64_t value)
 {
     char digits[20];
     size_t count = 0U;
@@ -782,6 +788,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     last_planar_checksum = 0U;
     last_planar_lines = 0U;
     last_animation_frames = last_animation_elapsed = 0U;
+    (void)memset(&last_c2p, 0, sizeof(last_c2p));
     last_graphics_readback = 0;
     (void)memset(&last_runtime, 0, sizeof(last_runtime));
     error_status[0] = '\0';
@@ -875,6 +882,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
         failure = "drawing_memory";
         goto cleanup;
     }
+    miga80_host_drawing_backend(drawing, c2p_backend);
     {
         unsigned int value;
         int animated = 0;
@@ -996,6 +1004,7 @@ cleanup:
         miga80_host_drawing_finish(drawing);
         last_animation_frames = miga80_host_drawing_frames(drawing);
         last_animation_elapsed = miga80_host_drawing_elapsed(drawing);
+        miga80_host_drawing_c2p_stats(drawing, &last_c2p);
         surface = miga80_host_drawing_surface(drawing);
         last_planar_checksum = miga80_source_view_checksum(surface->planes[0],
                                                           4U * MIGA80_DRAW_PLANE_BYTES);
@@ -1654,6 +1663,11 @@ static int run_cube_regression(struct Screen *screen, uint8_t *chunky,
                 last_planar_checksum != UINT32_C(0xefb69dc5))) ||
             last_animation_elapsed < 10U * 65536U || last_animation_elapsed >= 11U * 65536U ||
             !verify_display_palette()) { goto done; }
+        if (pixel && (last_c2p.calls != last_animation_frames ||
+            last_c2p.frequency == 0U || last_c2p.minimum == 0U)) { goto done; }
+        cube_samples[round].frames = last_animation_frames;
+        cube_samples[round].elapsed = last_animation_elapsed;
+        cube_samples[round].c2p = last_c2p;
         workflow_failure = "cube_source_return";
         if (workflow_key(screen, chunky, metrics, NULL, &state, DEMO_RAWKEY_ESCAPE, 0U) != 0 ||
             state != DEMO_STATE_SOURCE || !verify_source_view(screen, chunky)) { goto done; }
@@ -1676,7 +1690,27 @@ static int write_cube_report(const char *path, int success, int pixel)
     BPTR output = Open((STRPTR)path, MODE_NEWFILE);
     int written;
     if (output == 0) { return 0; }
-    written = write_text(output, "miga80_cube_report=1\n") &&
+    written = write_text(output, "miga80_cube_report=1\n");
+    if (pixel && success) {
+        unsigned int sample;
+        written = written && write_text(output, "c2p_backend=") &&
+            write_text(output, miga80_c2p_backend_name(c2p_backend)) && write_text(output, "\n");
+        for (sample = 0U; sample < 2U && written; ++sample) {
+            char prefix[16];
+            const struct miga80_c2p_stats *s = &cube_samples[sample].c2p;
+            const char *names[] = {"frames", "elapsed_q16", "c2p_calls", "c2p_ticks",
+                "eclock_hz", "c2p_min_ticks", "c2p_max_ticks"};
+            const uint64_t values[] = {cube_samples[sample].frames, cube_samples[sample].elapsed,
+                s->calls, s->ticks, s->frequency, s->minimum, s->maximum};
+            unsigned int field;
+            (void)snprintf(prefix, sizeof(prefix), "sample%u_", sample);
+            for (field = 0U; field < sizeof(values) / sizeof(values[0]) && written; ++field) {
+                written = write_text(output, prefix) && write_text(output, names[field]) &&
+                    write_text(output, "=") && write_decimal(output, values[field]) && write_text(output, "\n");
+            }
+        }
+    }
+    written = written &&
         write_text(output, "frames=") && write_decimal(output, last_animation_frames) &&
         write_text(output, "\nelapsed_q16=") && write_decimal(output, last_animation_elapsed) &&
         (success ? (write_text(output, "\nlua_native=pass\ndouble_buffer=pass\n") &&
@@ -1759,6 +1793,15 @@ int main(int argc, char **argv)
             supervisor_enabled = 0;
         } else if (strcmp(argv[argument], "SUPERVISOR") == 0) {
             supervisor_enabled = 1;
+        } else if (strcmp(argv[argument], "C2P=MASK32") == 0) {
+            c2p_backend = MIGA80_C2P_MASK32;
+        } else if (strcmp(argv[argument], "C2P=KALMS") == 0) {
+            c2p_backend = MIGA80_C2P_KALMS;
+        } else if (strcmp(argv[argument], "C2P=REFERENCE") == 0) {
+            c2p_backend = MIGA80_C2P_REFERENCE;
+        } else if (strncmp(argv[argument], "C2P=", 4U) == 0) {
+            (void)fprintf(stderr, "Unknown C2P backend: %s\n", argv[argument]);
+            return 20;
         }
     }
 

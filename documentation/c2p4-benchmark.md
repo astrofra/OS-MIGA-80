@@ -4,6 +4,11 @@
 
 **Decision authority:** Correctness is byte-exact on the host and under FS-UAE. Layout and performance decisions remain blocked on a physical stock PAL A1200.
 
+The animated runtime now uses mask32 assembly by default and includes a
+selectable Kalms adaptation. Its same-ADF, double-buffered cube comparison is
+documented separately in [Runtime C2P comparison](MIGA-80-c2p-runtime-comparison.md).
+The historical benchmark matrices below retain their original scope and results.
+
 ## 1. Scope
 
 This is the first C2P benchmark aligned with the three-layer graphics architecture. It converts only the transparent `PIXEL` viewport into the four PF1 planes. The native `PLANAR` base remains in PF2 and is never converted.

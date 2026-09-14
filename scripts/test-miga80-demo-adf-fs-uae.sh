@@ -16,6 +16,7 @@ MIGA80_CANDIDATE_REPORT="$MIGA80_RUN_DIR/candidate-report.txt"
 MIGA80_TEST_STARTUP="$MIGA80_RUN_DIR/Startup-Sequence.test"
 MIGA80_TIMEOUT_SECONDS="${MIGA80_FS_UAE_TIMEOUT_SECONDS:-45}"
 MIGA80_FAST_MEMORY="${MIGA80_FS_UAE_FAST_MEMORY:-0}"
+MIGA80_C2P_BACKEND="${MIGA80_C2P_BACKEND:-MASK32}"
 MIGA80_EMULATOR_PID=""
 
 stop_emulator() {
@@ -92,6 +93,12 @@ case "$MIGA80_FAST_MEMORY" in
     exit 1
     ;;
 esac
+case "$MIGA80_C2P_BACKEND" in
+  MASK32) MIGA80_C2P_REPORT_NAME=mask32 ;;
+  KALMS) MIGA80_C2P_REPORT_NAME=kalms ;;
+  REFERENCE) MIGA80_C2P_REPORT_NAME=reference ;;
+  *) printf 'Unknown C2P backend: %s\n' "$MIGA80_C2P_BACKEND" >&2; exit 1 ;;
+esac
 
 /bin/mkdir -p "$MIGA80_RUN_DIR" "$(dirname "$MIGA80_REPORT")"
 /bin/cp "$MIGA80_SOURCE_ADF" "$MIGA80_RUN_ADF"
@@ -106,12 +113,12 @@ case "$MIGA80_MODE" in
     ;;
   CUBETEST|CUBEPIXELTEST)
     printf '%s\n' \
-      "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
+      "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE C2P=$MIGA80_C2P_BACKEND" \
       >"$MIGA80_TEST_STARTUP"
     ;;
   AUTORUN|SELFTEST|STOPTEST|GRAPHICSTEST)
     printf '%s\n' \
-      "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE" \
+      "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE C2P=$MIGA80_C2P_BACKEND" \
       >"$MIGA80_TEST_STARTUP"
     ;;
   GRAPHICSTEST_DIRECT)
@@ -215,18 +222,36 @@ fi
 if [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
   if [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
     /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-chunky-fs-uae.txt"
+    /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-chunky-$MIGA80_C2P_REPORT_NAME-fs-uae.txt"
   else
     /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-fs-uae.txt"
   fi
-  python3 - "$MIGA80_REPORT" <<'PY_CHECK'
-import pathlib, sys
+  python3 - "$MIGA80_REPORT" "$MIGA80_C2P_BACKEND" "$MIGA80_MODE" "$MIGA80_SOURCE_ADF" "$MIGA80_FAST_MEMORY" <<'PY_CHECK'
+import hashlib, json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
 values = dict(line.split('=', 1) for line in s.splitlines())
 assert int(values.get('frames', '0')) >= 2, s
 assert 10 * 65536 <= int(values.get('elapsed_q16', '0')) < 11 * 65536, s
+if sys.argv[3] == 'CUBEPIXELTEST':
+    assert values['c2p_backend'] == sys.argv[2].lower(), s
+    for sample in range(2):
+        v = {k.removeprefix(f'sample{sample}_'): int(n) for k, n in values.items()
+             if k.startswith(f'sample{sample}_')}
+        assert v['frames'] == v['c2p_calls'] >= 2, s
+        assert 10 * 65536 <= v['elapsed_q16'] < 11 * 65536, s
+        assert v['eclock_hz'] > 0, s
+        assert 0 < v['c2p_min_ticks'] <= v['c2p_max_ticks'], s
+        assert v['c2p_min_ticks'] * v['c2p_calls'] <= v['c2p_ticks'] <= v['c2p_max_ticks'] * v['c2p_calls'], s
+        print(f"{values['c2p_backend']} sample {sample}: {v['frames']} frames, "
+              f"{v['elapsed_q16']/65536:.4f} s, C2P mean "
+              f"{1000*v['c2p_ticks']/v['c2p_calls']/v['eclock_hz']:.3f} ms")
+    p.with_name(f'cube-chunky-{values["c2p_backend"]}-fs-uae.json').write_text(json.dumps({
+        'adf_sha256': hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest(),
+        'fast_kib': int(sys.argv[5]), 'chip_kib': 2048, 'accuracy': 1, 'model': 'A1200 PAL'
+    }, indent=2) + '\n')
 p.write_text(''.join(line + '\n' for line in s.splitlines()
-                     if not line.startswith(('frames=', 'elapsed_q16='))))
+                     if not line.startswith(('frames=', 'elapsed_q16=', 'c2p_backend=', 'sample0_', 'sample1_'))))
 PY_CHECK
 fi
 if ! /usr/bin/diff -u "$MIGA80_EXPECTED" "$MIGA80_REPORT"; then

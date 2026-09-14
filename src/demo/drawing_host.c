@@ -1,3 +1,5 @@
+#define __USE_NEW_TIMEVAL__
+#include <devices/timer.h>
 #include <exec/memory.h>
 #include <exec/tasks.h>
 #include <graphics/gfx.h>
@@ -6,12 +8,14 @@
 #include <hardware/dmabits.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
+#include <proto/timer.h>
 
 #include "demo/drawing_host.h"
 #include "demo/animation.h"
 #include "graphics/c2p4_reference.h"
 
 #define DRAW_BATCH_SIZE 16U
+extern struct Device *TimerBase; /* held by the animation owner */
 static volatile struct Custom *const draw_custom =
     (volatile struct Custom *)0xdff000UL;
 
@@ -30,7 +34,37 @@ struct miga80_host_drawing {
     struct draw_command commands[DRAW_BATCH_SIZE];
     ULONG lines, frames, elapsed;
     struct miga80_animation *animation;
+    enum miga80_c2p_backend backend;
+    struct miga80_c2p_stats c2p;
 };
+
+const char *miga80_c2p_backend_name(enum miga80_c2p_backend backend)
+{
+    return backend == MIGA80_C2P_KALMS ? "kalms" :
+           backend == MIGA80_C2P_REFERENCE ? "reference" : "mask32";
+}
+
+void miga80_host_drawing_backend(struct miga80_host_drawing *drawing,
+    enum miga80_c2p_backend backend) { drawing->backend = backend; }
+
+void miga80_host_drawing_c2p_stats(struct miga80_host_drawing *drawing,
+    struct miga80_c2p_stats *stats) { *stats = drawing->c2p; }
+
+static enum Miga80C2P4Status convert_pixel(struct miga80_host_drawing *drawing,
+    uint8_t *planes[4], ULONG stride)
+{
+    /* The runtime's pset/line/cls and UI writes all produce colors 0..15. */
+    if (drawing->backend == MIGA80_C2P_KALMS) {
+        return miga80_c2p4_kalms_color4(drawing->surface.pixels,
+            256U, 256U, 256U, planes, stride);
+    }
+    if (drawing->backend == MIGA80_C2P_REFERENCE) {
+        return miga80_c2p4_reference_byte4(drawing->surface.pixels,
+            256U, 256U, 256U, planes, stride);
+    }
+    return miga80_c2p4_mask32_m68k_byte4(drawing->surface.pixels,
+        256U, 256U, 256U, planes, stride);
+}
 
 static void wait_blitter(void)
 {
@@ -188,9 +222,22 @@ static int service_drawing(void *data, ULONG signals)
         struct BitMap *bitmap = miga80_animation_back(drawing->animation);
         miga80_host_drawing_flush(drawing);
         if (drawing->surface.pixel_written) {
+            struct EClockVal start, end;
+            ULONG ticks;
+            enum Miga80C2P4Status status;
             for (plane = 0U; plane < 4U; ++plane) { front[plane] = bitmap->Planes[plane * 2U]; }
-            if (miga80_c2p4_reference_byte4(drawing->surface.pixels, 256U, 256U, 256U,
-                    front, bitmap->BytesPerRow) != MIGA80_C2P4_OK) { return 0; }
+            drawing->c2p.frequency = ReadEClock(&start);
+            status = convert_pixel(drawing, front, bitmap->BytesPerRow);
+            (void)ReadEClock(&end);
+            /* A single bounded full-frame conversion is below one 32-bit wrap. */
+            ticks = end.ev_lo - start.ev_lo;
+            if (status != MIGA80_C2P4_OK) { return 0; }
+            if (drawing->c2p.calls == 0U || ticks < drawing->c2p.minimum) {
+                drawing->c2p.minimum = ticks;
+            }
+            if (ticks > drawing->c2p.maximum) { drawing->c2p.maximum = ticks; }
+            drawing->c2p.ticks += ticks;
+            ++drawing->c2p.calls;
         }
         if (!miga80_animation_request(drawing->animation)) { return 0; }
         drawing->pending = 3U;
@@ -324,9 +371,7 @@ int miga80_host_drawing_publish(struct miga80_host_drawing *drawing,
                     MIGA80_DRAW_PLANE_STRIDE);
         }
     }
-    return miga80_c2p4_reference_byte4(drawing->surface.pixels,
-        MIGA80_DRAW_WIDTH, MIGA80_DRAW_HEIGHT, MIGA80_DRAW_WIDTH,
-        front, destination->BytesPerRow) == MIGA80_C2P4_OK;
+    return convert_pixel(drawing, front, destination->BytesPerRow) == MIGA80_C2P4_OK;
 }
 
 struct miga80_draw_surface *miga80_host_drawing_surface(

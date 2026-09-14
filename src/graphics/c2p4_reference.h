@@ -42,6 +42,14 @@ enum Miga80C2P4Status miga80_c2p4_reference_byte4(
     uint8_t *planes[MIGA80_C2P4_PLANE_COUNT],
     size_t plane_stride);
 
+/* Kalms adaptation: byte-per-pixel colors MUST be 0..15 (high bits zero).
+ * Width is a non-zero multiple of 32; independent planes and row strides.
+ * No allocation or OS calls. The host fallback is the scalar oracle;
+ * instruction-level tests execute the actual assembly separately. */
+enum Miga80C2P4Status miga80_c2p4_kalms_color4(
+    const uint8_t *chunky, size_t width, size_t height, size_t chunky_stride,
+    uint8_t *planes[MIGA80_C2P4_PLANE_COUNT], size_t plane_stride);
+
 /*
  * Build the persistent 1 KiB pair-transpose table used by the lookup
  * candidates.  Table construction is setup work and is not part of a frame.

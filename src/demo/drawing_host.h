@@ -7,6 +7,18 @@
 struct BitMap;
 struct Screen;
 struct miga80_host_drawing;
+enum miga80_c2p_backend {
+    MIGA80_C2P_MASK32, MIGA80_C2P_KALMS, MIGA80_C2P_REFERENCE
+};
+struct miga80_c2p_stats {
+    uint64_t ticks;
+    ULONG calls, frequency, minimum, maximum;
+};
+const char *miga80_c2p_backend_name(enum miga80_c2p_backend backend);
+void miga80_host_drawing_backend(struct miga80_host_drawing *drawing,
+    enum miga80_c2p_backend backend);
+void miga80_host_drawing_c2p_stats(struct miga80_host_drawing *drawing,
+    struct miga80_c2p_stats *stats);
 struct miga80_host_drawing *miga80_host_drawing_create(
     uint8_t *pixels, struct miga80_drawing_context *context,
     struct miga80_supervisor_events *events);

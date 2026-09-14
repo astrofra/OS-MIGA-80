@@ -147,8 +147,9 @@ sur A1200 reste attendu ; aucune cadence sur machine réelle n’est encore vali
 animation sur deux axes, avec une seule différence : `layer(PIXEL)` remplace
 `layer(PLANAR)`. `cls()` efface le tampon chunky sur le CPU, `line()` utilise
 Bresenham CPU et chaque `flip()` convertit les 65 536 pixels vers PF1 dans le
-bitmap caché. La conversion est actuellement la référence scalaire C
-`miga80_c2p4_reference_byte4`.
+bitmap caché. La conversion utilise désormais notre assembleur mask32 ;
+`C2P=KALMS` sélectionne l'adaptation Kalms, `C2P=REFERENCE` la référence C.
+Voir [l'intégration et la comparaison C2P](MIGA-80-c2p-runtime-comparison.md).
 
 ```sh
 gmake animation-chunky-test
@@ -174,15 +175,20 @@ Rapports : `build/reports/animation-chunky-host.txt` et
 `build/reports/cube-chunky-fs-uae.txt`. Les mesures restent celles de FS-UAE,
 sans validation physique A1200.
 
-Dernier essai A1200 PAL / 2 Mio Chip / sans Fast dans FS-UAE :
+Premier essai, avant intégration de l'ASM, A1200 PAL / 2 Mio Chip / sans Fast dans FS-UAE :
 
 | Variante | Images affichées | Durée depuis la première image |
 |---|---:|---:|
 | PLANAR, blitter direct | 168 | 10,04 s |
 | PIXEL, Bresenham CPU + C2P C | 5 | 10,42 s |
 
-La variante chunky fonctionne mais la rotation est très saccadée. Ces nombres
+Avec cette référence C, la variante chunky fonctionne mais la rotation est très saccadée. Ces nombres
 mesurent la chaîne de rendu complète, pas le coût isolé de Bresenham ou de la
 C2P. Le test passe trois interruptions ESC puis deux animations complètes, avec
 lecture de contrôle des pixels et sans croissance mémoire. Capture :
 `build/reports/cube-chunky-fs-uae.png`.
+
+La comparaison actuelle retrouve 5 images avec la référence, 40 avec notre
+ASM mask32 et 83 avec l'adaptation Kalms, sur deux exécutions par backend.
+Le disque `build/distribution/miga80-cube-chunky-kalms.adf` démarre Kalms ;
+`miga80-cube-chunky.adf` utilise mask32. Tous deux conservent le même Lua.

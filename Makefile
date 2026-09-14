@@ -427,10 +427,12 @@ COMPILER_CALL_MUSASHI_EXPECTED := \
 	tests/execute/call-survival.expected
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
 MIGA80_DEMO_SOURCE := src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
-	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c
+	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c \
+	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
 MIGA80_DEMO_HEADERS := src/demo/supervisor.h src/demo/stop_test.h \
 	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
-MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S
+MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S \
+	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
 MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \
 	$(COMPILER_FRONTEND_SOURCE) $(COMPILER_IR_SOURCE) \
 	$(COMPILER_VALUE_IR_SOURCE) $(COMPILER_BACKEND_SOURCE) \
@@ -1366,7 +1368,7 @@ exclusive-graphics-test-adf-fs-uae: $(EXCLUSIVE_GRAPHICS_TEST_ADF) \
 runtime-compare:
 	./scripts/compare-c-runtimes.sh
 
-check: animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
+check: c2p4-asm-test animation-test drawing-test runtime-guards-test miga68k-test compiler-abi-test compiler-test compiler-execute-test \
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
@@ -1433,3 +1435,31 @@ build/distribution/miga80-cube-chunky.adf: $(MIGA80_DEMO_PROGRAM) assets/demo/cu
 miga80-cube-chunky-fs-uae: build/distribution/miga80-cube-chunky.adf
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=360 $(MIGA80_DEMO_ADF_TESTER) $< \
 		tests/smoke/source-view-adf/cube-chunky-expected.txt CUBEPIXELTEST
+
+.PHONY: c2p4-asm-test miga80-cube-c2p-compare
+c2p4-asm-test: $(MIGA68K_TEST_PROGRAM)
+	@mkdir -p $(HOST_BUILD_DIR)/c2p4-asm $(REPORT_DIR)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) $(HOST_CFLAGS) -fsanitize=address,undefined \
+		tests/host/c2p4-kalms/main.c src/graphics/c2p4_kalms.c $(C2P4_REFERENCE_SOURCE) \
+		-o $(HOST_BUILD_DIR)/c2p4-asm/wrapper-test
+	$(HOST_BUILD_DIR)/c2p4-asm/wrapper-test >$(REPORT_DIR)/c2p4-asm.txt
+	$(PYTHON) scripts/test-c2p4-asm.py $(MIGA68K_TEST_PROGRAM) $(TARGET_CC) $(TARGET_OBJCOPY) \
+		>>$(REPORT_DIR)/c2p4-asm.txt
+	@tail -n 1 $(REPORT_DIR)/c2p4-asm.txt
+
+# The ADF harness has one shared run directory; these runs must stay sequential.
+miga80-cube-c2p-compare: c2p4-asm-test build/distribution/miga80-cube-chunky.adf
+	cp build/distribution/miga80-cube-chunky.adf build/distribution/miga80-cube-c2p-tested.adf
+	MIGA80_C2P_BACKEND=REFERENCE $(MAKE) miga80-cube-chunky-fs-uae
+	MIGA80_C2P_BACKEND=MASK32 $(MAKE) miga80-cube-chunky-fs-uae
+	MIGA80_C2P_BACKEND=KALMS $(MAKE) miga80-cube-chunky-fs-uae
+	$(PYTHON) scripts/report-cube-c2p.py
+
+.PHONY: miga80-cube-chunky-kalms-adf
+miga80-cube-chunky-kalms-adf: build/distribution/miga80-cube-chunky-kalms.adf
+build/distribution/miga80-cube-chunky-kalms.adf: $(MIGA80_DEMO_PROGRAM) assets/demo/cube-chunky.lua \
+        assets/demo/layers.lua assets/demo/Startup-Cube-Kalms $(MIGA80_DEMO_README) \
+        $(FONT4X8_GENERATED_BINARY) LICENSE $(MIGA80_DEMO_ADF_BUILDER)
+	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) assets/demo/cube-chunky.lua \
+		$(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Cube-Kalms $(MIGA80_DEMO_README) \
+		LICENSE $@ assets/demo/layers.lua assets/demo/cube-chunky.lua
