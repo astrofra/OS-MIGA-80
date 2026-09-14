@@ -1378,13 +1378,18 @@ static int run_event_loop(struct Window *window, struct Screen *screen,
     ui.browsing = browse;
     if (browse) {
         (void)miga80_file_picker_scan(&ui.picker, ui.picker.path);
-        if (!ui_picker(&ui, screen, chunky) || !write_browser_ready_report(report_path)) { result = -1; }
+        if (!ui_picker(&ui, screen, chunky)) { result = -1; }
     } else {
         size_t pixel;
         /* Preserve the startup status, including autoboot compile errors. */
         for (pixel = 0U; pixel < DEMO_CHUNKY_BYTES; ++pixel) { chunky[pixel] >>= 4; }
         draw_interactive_title(chunky);
         if (!publish_ui(screen, chunky)) { result = -1; }
+    }
+    if (result == 0) {
+        /* Keep the intro pointer hidden through the scan and first UI frame. */
+        ClearPointer(window);
+        if (browse && !write_browser_ready_report(report_path)) { result = -1; }
     }
     while (result == 0) {
         struct IntuiMessage *message;
@@ -2184,6 +2189,7 @@ int main(int argc, char **argv)
     struct Miga80SourceViewMetrics metrics;
     struct Screen *screen = NULL;
     struct Window *window = NULL;
+    UWORD *blank_pointer = NULL;
     uint8_t *chunky = NULL;
     size_t source_size = 0U;
     ULONG chip_revision;
@@ -2275,6 +2281,16 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     active_window = window;
+    if (splash) {
+        /* One transparent sprite row, plus two leading/trailing control words.
+         * Keep its Chip RAM alive until the window and screen are closed. */
+        blank_pointer = (UWORD *)AllocMem(6U * sizeof(UWORD), MEMF_CHIP | MEMF_CLEAR);
+        if (blank_pointer != NULL) {
+            SetPointer(window, blank_pointer, 1, 16, 0, 0);
+        } else {
+            splash = 0;
+        }
+    }
 
     chunky = (uint8_t *)AllocMem((ULONG)DEMO_CHUNKY_BYTES,
                                  MEMF_PUBLIC | MEMF_CLEAR);
@@ -2320,6 +2336,7 @@ int main(int argc, char **argv)
         }
         WaitTOF();
         WaitTOF();
+        if (blank_pointer != NULL) { ClearPointer(window); }
         if (!verify_source_view(screen, chunky)) {
             failure = "source_view_readback";
             goto cleanup;
@@ -2378,6 +2395,9 @@ cleanup:
             workflow_failure = failure;
             success = 0;
         }
+    }
+    if (blank_pointer != NULL) {
+        FreeMem(blank_pointer, 6U * sizeof(UWORD));
     }
     if (KeymapBase != NULL) {
         CloseLibrary(KeymapBase);

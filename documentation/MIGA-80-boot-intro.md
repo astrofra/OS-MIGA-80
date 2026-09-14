@@ -9,6 +9,14 @@ to the nearest pixel on both axes. The image is encoded into the executable at
 build time; no PNG decoder or external image read is needed on the Amiga.
 Logo export and host previews require Pillow in the build Python environment.
 
+The mouse pointer stays hidden throughout intro preparation, playback and the
+transition to the first source or selector frame, including ESC/left-click skips.
+A transparent Chip RAM sprite is installed with `SetPointer()`; `ClearPointer()`
+restores the default pointer once the interface is displayed. Its storage remains
+alive until the window and screen close, including early quit/error paths. See
+the [Intuition pointer documentation](https://wiki.amigaos.net/wiki/Intuition_Pointer).
+If this small allocation fails, startup skips the intro and opens the interface.
+
 The intro lasts 3.2 seconds from its first displayed frame: horizontal band
 shifts, dropped fragments and restrained cyan/magenta offsets resolve into the
 clean logo, followed by a fragmented exit. Short color offsets follow the
