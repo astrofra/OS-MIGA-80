@@ -1386,11 +1386,20 @@ and line drawing, and synchronized double buffering. ESC during animation,
 F5 replay and resource cleanup are covered by the ADF regression. See
 [the cube checkpoint](MIGA-80-cube-animation.md). Physical A1200 feedback remains pending.
 
-PIXEL now uses the existing mask32 68020 converter in the runtime, with a
-selectable Kalms four-plane adaptation and scalar reference. The same-ADF
+PIXEL uses the Kalms four-plane 68020 adaptation by default, selected by the
+project owner on 2026-09-14. The existing mask32 converter and scalar reference
+remain selectable for comparison. The same-ADF
 cube comparison reports full-frame C2P timing separately and tests ESC,
 replay, readback and cleanup for all three backends. See the
 [runtime C2P comparison](MIGA-80-c2p-runtime-comparison.md).
+
+A reference development-preview distribution now lives in `release/miga80.adf`.
+It packages all four Lua demos in `SYS:demos` and boots into a graphical
+filesystem selector: mouse selection/double-click load, F2 reopening, folders,
+pagination, cancellation and transactional source validation. The source view
+remains read-only (30 lines, 64 columns); this is not the full Phase 1 shell or
+editor. The release manifest records every packaged payload. See the
+[file selector and distribution checkpoint](MIGA-80-file-selector-and-release.md).
 
 The pinned Musashi runner foundation and compiler connection are implemented.
 One explicitly typed `i8`/`u8`/`i16`/`u16`/`i32`/`fix`/`bool`/`string`/`symbol`

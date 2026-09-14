@@ -29,6 +29,7 @@
 #include <utility/tagitem.h>
 
 #include "graphics/c2p_reference.h"
+#include "graphics/c2p4_reference.h"
 #include "compiler/abi/runtime.h"
 #include "compiler/backend_m68k/encoder.h"
 #include "compiler/frontend/frontend.h"
@@ -36,6 +37,7 @@
 #include "compiler/value_ir/value_ir.h"
 #include "demo/supervisor.h"
 #include "demo/stop_test.h"
+#include "demo/file_picker.h"
 #include "demo/drawing_host.h"
 #include "drawing_test_data.h"
 #include "ui/palette.h"
@@ -62,8 +64,8 @@
      (2U * DEMO_STACK_GUARD_BYTES))
 #define DEMO_STACK_LOWER_GUARD 0x5aU
 #define DEMO_STACK_UPPER_GUARD 0xa5U
-#define DEMO_DEFAULT_SOURCE "MIGA80:DATA/DEFAULT.LUA"
-#define DEMO_DEFAULT_REPORT "MIGA80:BOOTED.TXT"
+#define DEMO_DEFAULT_SOURCE "SYS:demos/default.lua"
+#define DEMO_DEFAULT_REPORT "RAM:MIGA80-BOOTED.TXT"
 #define DEMO_RAWKEY_ESCAPE 0x45U
 #define DEMO_RAWKEY_F5 0x54U
 
@@ -72,6 +74,8 @@ struct IntuitionBase *IntuitionBase = NULL;
 struct Library *KeymapBase = NULL;
 
 static char source_buffer[DEMO_SOURCE_CAPACITY + 1U];
+static char pending_source[DEMO_SOURCE_CAPACITY + 1U];
+static const char *interactive_source_path;
 static ULONG amiga_palette[1U + (DEMO_PALETTE_COLORS * 3U) + 1U];
 static ULONG palette_readback[DEMO_PALETTE_COLORS * 3U];
 static UBYTE *compiler_stack_allocation;
@@ -93,7 +97,7 @@ static struct miga80_drawing_context last_drawing_context;
 static uint32_t last_planar_checksum;
 static ULONG last_planar_lines;
 static ULONG last_animation_frames, last_animation_elapsed;
-static enum miga80_c2p_backend c2p_backend = MIGA80_C2P_MASK32;
+static enum miga80_c2p_backend c2p_backend = MIGA80_C2P_DEFAULT;
 static struct miga80_c2p_stats last_c2p;
 static struct {
     ULONG frames, elapsed;
@@ -457,7 +461,7 @@ static int write_stopped_report(const char *path)
     return success;
 }
 
-static int load_source(const char *path, size_t *source_size)
+static int read_source(const char *path, char *buffer, size_t *source_size)
 {
     BPTR input = Open((STRPTR)path, MODE_OLDFILE);
     LONG count;
@@ -465,13 +469,18 @@ static int load_source(const char *path, size_t *source_size)
     if (input == (BPTR)0) {
         return 0;
     }
-    count = Read(input, source_buffer, (LONG)sizeof(source_buffer));
+    count = Read(input, buffer, (LONG)sizeof(source_buffer));
     if (!Close(input) || count < 0 || (size_t)count > DEMO_SOURCE_CAPACITY) {
         return 0;
     }
-    source_buffer[count] = '\0';
+    buffer[count] = '\0';
     *source_size = (size_t)count;
     return 1;
+}
+
+static int load_source(const char *path, size_t *source_size)
+{
+    return read_source(path, source_buffer, source_size);
 }
 
 static ULONG expand_nibble(ULONG value)
@@ -671,6 +680,34 @@ static int publish_canonical(struct Screen *screen, uint8_t *chunky)
     return 1;
 }
 
+/* Interactive UI is canonical colour4, so it can use the selected fast
+ * default without the historical eight-plane reference conversion. */
+static int publish_ui(struct Screen *screen, uint8_t *chunky)
+{
+    struct BitMap *bitmap = screen->RastPort.BitMap;
+    uint8_t *planes[4];
+    unsigned int plane;
+    if (bitmap == NULL || GetBitMapAttr(bitmap, BMA_DEPTH) != 8U) { return 0; }
+    for (plane = 0U; plane < 4U; ++plane) {
+        if (bitmap->Planes[plane * 2U] == NULL ||
+            bitmap->Planes[plane * 2U + 1U] == NULL) { return 0; }
+        planes[plane] = bitmap->Planes[plane * 2U];
+    }
+    WaitBlit();
+    for (plane = 0U; plane < 4U; ++plane) {
+        (void)memset(bitmap->Planes[plane * 2U + 1U], 0,
+                     (size_t)bitmap->BytesPerRow * DEMO_SCREEN_HEIGHT);
+    }
+    if (miga80_c2p4_kalms_color4(chunky, DEMO_SCREEN_WIDTH, DEMO_SCREEN_HEIGHT,
+            DEMO_SCREEN_WIDTH, planes, bitmap->BytesPerRow) != MIGA80_C2P4_OK) {
+        return 0;
+    }
+    /* Keep the source readback/checksum representation used by the workflow. */
+    place_in_playfield_one(chunky);
+    WaitTOF();
+    return 1;
+}
+
 static UBYTE spread_four_bits(UBYTE value)
 {
     value &= 0x0fU;
@@ -697,16 +734,27 @@ static int verify_source_view(struct Screen *screen, const uint8_t *chunky)
            verify_pixel(&screen->RastPort, chunky, 4U, 252U);
 }
 
+static void draw_interactive_title(uint8_t *chunky)
+{
+    char title[65];
+    (void)snprintf(title, sizeof(title), "%-54.54s [OPEN F2]",
+                   FilePart((STRPTR)interactive_source_path));
+    miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 0U, title, 9U, 2U);
+}
+
 static int show_source_status(struct Screen *screen, uint8_t *chunky,
                               const char *status)
 {
     struct Miga80SourceViewMetrics scratch;
 
-    return miga80_source_view_render_with_status(
-               chunky, DEMO_SCREEN_WIDTH, source_buffer,
-               text_length(source_buffer), status, &scratch) ==
-               MIGA80_SOURCE_VIEW_OK &&
-           publish_canonical(screen, chunky);
+    if (miga80_source_view_render_with_status(
+            chunky, DEMO_SCREEN_WIDTH, source_buffer, text_length(source_buffer),
+            status, &scratch) != MIGA80_SOURCE_VIEW_OK) { return 0; }
+    if (interactive_source_path != NULL) {
+        draw_interactive_title(chunky);
+        return publish_ui(screen, chunky);
+    }
+    return publish_canonical(screen, chunky);
 }
 
 static void format_compile_error(char *status, size_t capacity,
@@ -1191,35 +1239,264 @@ static int workflow_key(struct Screen *screen, uint8_t *chunky,
     return 0;
 }
 
-static int run_event_loop(struct Window *window, struct Screen *screen,
-                           uint8_t *chunky,
-                           const struct Miga80SourceViewMetrics *metrics,
-                           const char *report_path)
+struct demo_ui {
+    struct miga80_file_picker picker;
+    struct Miga80SourceViewMetrics metrics;
+    enum demo_state state;
+    int browsing;
+    char source_path[MIGA80_PICKER_PATH_SIZE];
+};
+
+static int ui_source(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
 {
-    enum demo_state state = DEMO_STATE_SOURCE;
+    ui->browsing = 0;
+    ui->state = DEMO_STATE_SOURCE;
+    return show_source_status(screen, chunky,
+                              "SOURCE READY - F2 OPEN - F5 RUN - CTRL-Q EXIT");
+}
 
-    for (;;) {
+static int ui_picker(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
+{
+    miga80_file_picker_render(&ui->picker, chunky);
+    return publish_ui(screen, chunky);
+}
+
+static int ui_load(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
+{
+    char path[MIGA80_PICKER_PATH_SIZE];
+    size_t size;
+    struct Miga80SourceViewMetrics metrics;
+    enum Miga80SourceViewStatus status;
+    if (!miga80_file_picker_selected_path(&ui->picker, path) ||
+        !read_source(path, pending_source, &size)) {
+        (void)strcpy(ui->picker.status, "CANNOT LOAD FILE (READ ERROR OR MORE THAN 4096 BYTES)");
+        return ui_picker(ui, screen, chunky);
+    }
+    status = miga80_source_view_render(chunky, DEMO_SCREEN_WIDTH,
+                                      pending_source, size, &metrics);
+    if (status != MIGA80_SOURCE_VIEW_OK) {
+        const char *reason = status == MIGA80_SOURCE_VIEW_TOO_MANY_LINES
+            ? "SOURCE EXCEEDS 30 LINES" : status == MIGA80_SOURCE_VIEW_LINE_TOO_LONG
+            ? "SOURCE EXCEEDS 64 COLUMNS" : "SOURCE MUST BE PRINTABLE ASCII WITH LF NEWLINES";
+        (void)snprintf(ui->picker.status, sizeof(ui->picker.status), "%s", reason);
+        return ui_picker(ui, screen, chunky);
+    }
+    /* No source or compiler metrics change until the complete file validates. */
+    (void)memcpy(source_buffer, pending_source, size + 1U);
+    ui->metrics = metrics;
+    (void)strcpy(ui->source_path, path);
+    return ui_source(ui, screen, chunky);
+}
+
+/* Real IDCMP and the on-target selector regression share this dispatch. */
+static int ui_event(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky,
+    const char *report_path, ULONG message_class, UWORD code, UWORD qualifiers,
+    WORD x, WORD y, ULONG seconds, ULONG micros)
+{
+    enum miga80_picker_action action;
+    if (message_class == IDCMP_RAWKEY && is_quit_key(code, qualifiers)) { return 1; }
+    if (message_class == IDCMP_RAWKEY && code == (DEMO_RAWKEY_ESCAPE | 0x80U)) {
+        escape_held = 0;
+    }
+    if (ui->browsing) {
+        if (message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) {
+            action = miga80_file_picker_mouse(&ui->picker, x, y, seconds, micros);
+        } else if (message_class == IDCMP_RAWKEY) {
+            action = miga80_file_picker_key(&ui->picker, code);
+        } else { return 0; }
+        if (action == MIGA80_PICKER_LOAD) { return ui_load(ui, screen, chunky) ? 0 : -1; }
+        if (action == MIGA80_PICKER_CANCEL) { return ui_source(ui, screen, chunky) ? 0 : -1; }
+        if (action == MIGA80_PICKER_REDRAW) { return ui_picker(ui, screen, chunky) ? 0 : -1; }
+        return 0;
+    }
+    if ((ui->state == DEMO_STATE_SOURCE || ui->state == DEMO_STATE_ERROR) &&
+        ((message_class == IDCMP_RAWKEY && code == 0x51U &&
+          (qualifiers & IEQUALIFIER_REPEAT) == 0U) ||
+         (message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN &&
+          y >= 0 && y < 8 && x >= 220 && x < 256))) {
+        ui->browsing = 1;
+        (void)miga80_file_picker_scan(&ui->picker, ui->picker.path);
+        return ui_picker(ui, screen, chunky) ? 0 : -1;
+    }
+    if (message_class == IDCMP_RAWKEY) {
+        return workflow_key(screen, chunky, &ui->metrics, report_path,
+                             &ui->state, code, qualifiers);
+    }
+    return 0;
+}
+
+static int run_event_loop(struct Window *window, struct Screen *screen,
+    uint8_t *chunky, const struct Miga80SourceViewMetrics *metrics,
+    const char *report_path, const char *source_path, int browse)
+{
+    struct demo_ui ui;
+    int result = 0;
+    (void)memset(&ui, 0, sizeof(ui));
+    miga80_file_picker_init(&ui.picker);
+    (void)strcpy(ui.picker.path, "SYS:demos");
+    ui.metrics = *metrics;
+    (void)snprintf(ui.source_path, sizeof(ui.source_path), "%s", browse ? "(no source loaded)" : source_path);
+    interactive_source_path = ui.source_path;
+    ui.browsing = browse;
+    if (browse) {
+        (void)miga80_file_picker_scan(&ui.picker, ui.picker.path);
+        if (!ui_picker(&ui, screen, chunky)) { result = -1; }
+    } else {
+        size_t pixel;
+        /* Preserve the startup status, including autoboot compile errors. */
+        for (pixel = 0U; pixel < DEMO_CHUNKY_BYTES; ++pixel) { chunky[pixel] >>= 4; }
+        draw_interactive_title(chunky);
+        if (!publish_ui(screen, chunky)) { result = -1; }
+    }
+    while (result == 0) {
         struct IntuiMessage *message;
-
         WaitPort(window->UserPort);
-        while ((message =
-                    (struct IntuiMessage *)GetMsg(window->UserPort)) != NULL) {
+        while ((message = (struct IntuiMessage *)GetMsg(window->UserPort)) != NULL) {
             const ULONG message_class = message->Class;
-            const UWORD code = message->Code;
-            const UWORD qualifiers = message->Qualifier;
-            int result;
-
+            const UWORD code = message->Code, qualifiers = message->Qualifier;
+            const WORD x = message->MouseX, y = message->MouseY;
+            const ULONG seconds = message->Seconds, micros = message->Micros;
             ReplyMsg((struct Message *)message);
-            if (message_class != IDCMP_RAWKEY) {
-                continue;
-            }
-            result = workflow_key(screen, chunky, metrics, report_path,
-                                    &state, code, qualifiers);
-            if (result != 0) {
-                return result > 0;
-            }
+            result = ui_event(&ui, screen, chunky, report_path, message_class,
+                               code, qualifiers, x, y, seconds, micros);
+            if (result != 0) { break; }
         }
     }
+    miga80_file_picker_free(&ui.picker);
+    interactive_source_path = NULL;
+    return result > 0;
+}
+
+static const char *browser_failure;
+
+static int browser_find(const struct demo_ui *ui, const char *name)
+{
+    int i;
+    for (i = 0; i < ui->picker.count; ++i) {
+        if (strcmp(ui->picker.entries[i].name, name) == 0) { return i; }
+    }
+    return -1;
+}
+
+static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
+    const struct Miga80SourceViewMetrics *metrics)
+{
+    struct demo_ui ui;
+    int passed = 0, i, round;
+    ULONG baseline = 0U;
+    const ULONG signals = FindTask(NULL)->tc_SigAlloc;
+    const char *bad[] = {"Broken.lua", "Huge.lua", "Long.lua", "Rows.lua", "Gone.lua"};
+    (void)memset(&ui, 0, sizeof(ui));
+    miga80_file_picker_init(&ui.picker);
+    ui.metrics = *metrics;
+    (void)strcpy(ui.source_path, "SYS:demos/default.lua");
+    interactive_source_path = ui.source_path;
+#define BROWSER_CHECK(label, condition) \
+    do { browser_failure = (label); if (!(condition)) { goto done; } } while (0)
+#define BROWSER_KEY(code) ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY, (code), 0U, 0, 0, 0U, 0U)
+#define BROWSER_CLICK(x, y, seconds, micros) \
+    ui_event(&ui, screen, chunky, NULL, IDCMP_MOUSEBUTTONS, SELECTDOWN, 0U, (x), (y), (seconds), (micros))
+    BROWSER_CHECK("scan_demos", miga80_file_picker_scan(&ui.picker, "SYS:demos") &&
+        ui.picker.count == 4 && strcmp(ui.picker.entries[0].name, "cube-chunky.lua") == 0 &&
+        strcmp(ui.picker.entries[1].name, "cube.lua") == 0 &&
+        strcmp(ui.picker.entries[2].name, "default.lua") == 0 &&
+        strcmp(ui.picker.entries[3].name, "layers.lua") == 0);
+    ui.browsing = 1;
+    BROWSER_CHECK("render_picker", ui_picker(&ui, screen, chunky) && verify_source_view(screen, chunky));
+    BROWSER_CHECK("single_click", BROWSER_CLICK(40, 44, 10U, 0U) == 0 &&
+        ui.browsing && ui.picker.selected == 0 && ui.metrics.source_checksum == metrics->source_checksum);
+    BROWSER_CHECK("different_row_not_double_click", BROWSER_CLICK(40, 60, 10U, 100000U) == 0 &&
+        ui.browsing && ui.picker.selected == 1);
+    BROWSER_CHECK("double_click_load", BROWSER_CLICK(40, 60, 10U, 200000U) == 0 &&
+        !ui.browsing && strcmp(ui.source_path, "SYS:demos/cube.lua") == 0 &&
+        ui.metrics.source_checksum != metrics->source_checksum && verify_source_view(screen, chunky));
+    /* Every shipped demo loads through the real dispatcher; loading never runs it. */
+    for (i = 0; i < 4; ++i) {
+        BROWSER_CHECK("f2_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
+        BROWSER_CHECK("single_select", BROWSER_CLICK(40, (WORD)(44 + i * 16), 20U + (ULONG)i, 0U) == 0 && ui.browsing);
+        BROWSER_CHECK("return_or_open_load",
+            (i == 0 ? BROWSER_CLICK(140, 235, 25U, 0U) : BROWSER_KEY(0x44U)) == 0 &&
+            !ui.browsing && ui.state == DEMO_STATE_SOURCE);
+        BROWSER_CHECK("source_bytes", miga80_source_view_checksum(source_buffer, strlen(source_buffer)) == ui.metrics.source_checksum);
+    }
+    BROWSER_CHECK("loaded_source_f5", BROWSER_KEY(DEMO_RAWKEY_F5) == 0 && ui.state == DEMO_STATE_RESULT &&
+        last_runtime.fault_code == 0U && last_planar_lines > 0U);
+    BROWSER_CHECK("result_escape", BROWSER_KEY(DEMO_RAWKEY_ESCAPE) == 0 && ui.state == DEMO_STATE_SOURCE &&
+        verify_source_view(screen, chunky));
+    BROWSER_CHECK("mouse_open_button", BROWSER_CLICK(235, 4, 30U, 0U) == 0 && ui.browsing);
+    BROWSER_CHECK("picker_f5_ignored", BROWSER_KEY(DEMO_RAWKEY_F5) == 0 && ui.browsing);
+    BROWSER_CHECK("scan_fixtures", miga80_file_picker_scan(&ui.picker, "SYS:picker-test") &&
+        ui.picker.count == 20 && ui.picker.entries[0].directory && ui.picker.entries[1].directory &&
+        browser_find(&ui, "note.txt") < 0);
+    BROWSER_CHECK("next_page", BROWSER_CLICK(80, 235, 40U, 0U) == 0 && ui.picker.first == 12 && ui.picker.selected == -1);
+    BROWSER_CHECK("previous_page", BROWSER_CLICK(10, 235, 40U, 100000U) == 0 && ui.picker.first == 0);
+    for (i = 0; i < 14; ++i) { BROWSER_CHECK("keyboard_scroll", BROWSER_KEY(0x4dU) == 0); }
+    BROWSER_CHECK("keyboard_page_boundary", ui.picker.selected == 13 && ui.picker.first == 12);
+    for (i = 0; i < 5; ++i) {
+        const uint32_t checksum = ui.metrics.source_checksum;
+        ui.picker.selected = browser_find(&ui, bad[i]);
+        BROWSER_CHECK("bad_file_found", ui.picker.selected >= 0);
+        if (i == 4) { BROWSER_CHECK("delete_test_fixture", DeleteFile("SYS:picker-test/Gone.lua")); }
+        BROWSER_CHECK("bad_file_preserves_source", BROWSER_KEY(0x44U) == 0 && ui.browsing &&
+            ui.metrics.source_checksum == checksum &&
+            miga80_source_view_checksum(source_buffer, strlen(source_buffer)) == checksum &&
+            strcmp(ui.source_path, "SYS:demos/layers.lua") == 0);
+    }
+    BROWSER_CHECK("scan_failure_preserves_directory",
+        !miga80_file_picker_scan(&ui.picker, "SYS:missing-directory") &&
+        strcmp(ui.picker.path, "SYS:picker-test") == 0 && ui.picker.count == 20);
+    ui.picker.selected = browser_find(&ui, "empty");
+    BROWSER_CHECK("empty_directory", BROWSER_KEY(0x44U) == 0 && ui.picker.count == 0 && ui.browsing);
+    BROWSER_CHECK("empty_click", BROWSER_CLICK(40, 44, 50U, 0U) == 0 && ui.picker.selected == -1 && ui.browsing);
+    BROWSER_CHECK("parent", BROWSER_KEY(0x41U) == 0 && strcmp(ui.picker.path, "SYS:picker-test") == 0);
+    ui.picker.selected = browser_find(&ui, "nested");
+    BROWSER_CHECK("nested_directory", BROWSER_KEY(0x44U) == 0 && ui.picker.count == 1 &&
+        strcmp(ui.picker.entries[0].name, "inside.LuA") == 0);
+    BROWSER_CHECK("sys_root", BROWSER_CLICK(10, 26, 51U, 0U) == 0 && strcmp(ui.picker.path, "SYS:") == 0);
+    BROWSER_CHECK("root_parent", BROWSER_KEY(0x41U) == 0 && strcmp(ui.picker.path, "SYS:") == 0);
+    BROWSER_CHECK("cancel_preserves_source", BROWSER_KEY(DEMO_RAWKEY_ESCAPE) == 0 && !ui.browsing &&
+        strcmp(ui.source_path, "SYS:demos/layers.lua") == 0 && verify_source_view(screen, chunky));
+    for (round = 0; round < 4; ++round) {
+        for (i = 0; i < 4; ++i) {
+            BROWSER_CHECK("repeat_scan", miga80_file_picker_scan(&ui.picker, "SYS:demos") &&
+                miga80_file_picker_scan(&ui.picker, "SYS:picker-test/empty"));
+        }
+        miga80_file_picker_free(&ui.picker);
+        BROWSER_CHECK("memory_no_growth", round == 0 || AvailMem(MEMF_PUBLIC) >= baseline);
+        baseline = AvailMem(MEMF_PUBLIC);
+    }
+    ui.browsing = 1;
+    BROWSER_CHECK("ctrl_q_exit", ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY,
+        0x10U, IEQUALIFIER_CONTROL, 0, 0, 0U, 0U) == 1);
+    BROWSER_CHECK("signals_released", FindTask(NULL)->tc_SigAlloc == signals);
+    passed = 1;
+    browser_failure = NULL;
+done:
+    miga80_file_picker_free(&ui.picker);
+    interactive_source_path = NULL;
+#undef BROWSER_CHECK
+#undef BROWSER_KEY
+#undef BROWSER_CLICK
+    return passed;
+}
+
+static int write_browser_report(const char *path, int passed)
+{
+    BPTR output = Open((STRPTR)path, MODE_NEWFILE);
+    int written;
+    if (output == (BPTR)0) { return 0; }
+    written = write_text(output, "miga80_browser_report=1\n") &&
+        (passed ? write_text(output,
+            "sys_demos_scan_sort=pass\nmouse_select_double_click=pass\n"
+            "all_four_demos_load=pass\nloaded_source_f5=pass\nresult_escape=pass\n"
+            "f2_mouse_reopen=pass\nfolders_filter_pagination=pass\n"
+            "invalid_missing_large_preserve_source=pass\nempty_directory=pass\n"
+            "parent_sys_root=pass\ncancel_preserves_source=pass\n"
+            "memory_no_growth=pass\nctrl_q_exit=pass\nhosted_cleanup=pass\nresult=pass\n") :
+            (write_text(output, "failure=") && write_text(output,
+                browser_failure != NULL ? browser_failure : "browser_setup_or_cleanup") &&
+             write_text(output, "\nresult=fail\n")));
+    return Close(output) && written;
 }
 
 static int workflow_case(struct Screen *screen, uint8_t *chunky,
@@ -1763,13 +2040,15 @@ int main(int argc, char **argv)
         {WA_Activate, TRUE},
         {WA_RMBTrap, TRUE},
         {WA_SimpleRefresh, TRUE},
-        {WA_IDCMP, IDCMP_RAWKEY},
+        {WA_IDCMP, IDCMP_RAWKEY | IDCMP_MOUSEBUTTONS},
         {TAG_DONE, 0U}
     };
     const char *source_path =
         argc > 1 && argv[1][0] != '\0' ? argv[1] : DEMO_DEFAULT_SOURCE;
     const char *report_path =
         argc > 2 && argv[2][0] != '\0' ? argv[2] : DEMO_DEFAULT_REPORT;
+    const int browse = argc == 1 || (argc > 3 && strcmp(argv[3], "BROWSE") == 0);
+    const int browsertest = argc > 3 && strcmp(argv[3], "BROWSERTEST") == 0;
     const int cubepixeltest = argc > 3 && strcmp(argv[3], "CUBEPIXELTEST") == 0;
     const int cubetest = cubepixeltest || (argc > 3 && strcmp(argv[3], "CUBETEST") == 0);
     const int cube = argc > 3 && strcmp(argv[3], "CUBE") == 0;
@@ -1806,7 +2085,7 @@ int main(int argc, char **argv)
     }
 
     (void)write_running_report(report_path);
-    if (!load_source(source_path, &source_size)) {
+    if (!browse && !load_source(source_path, &source_size)) {
         failure = "load_default_source";
         goto cleanup;
     }
@@ -1916,7 +2195,9 @@ int main(int argc, char **argv)
     }
 
     success = 1;
-    if (cubetest) {
+    if (browsertest) {
+        success = run_browser_regression(screen, chunky, &metrics);
+    } else if (cubetest) {
         success = run_cube_regression(screen, chunky, &metrics, cubepixeltest);
     } else if (cube) {
         char error_status[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
@@ -1924,7 +2205,8 @@ int main(int argc, char **argv)
             error_status, sizeof(error_status));
         success = show_source_status(screen, chunky, completed
             ? "CUBE FINISHED - F5 REPLAY - CTRL-Q EXIT" : error_status) &&
-            run_event_loop(window, screen, chunky, &metrics, report_path);
+            run_event_loop(window, screen, chunky, &metrics, report_path, source_path,
+                           browse);
     } else if (graphicstest) {
         success = run_graphics_regression(screen, chunky);
     } else if (stoptest) {
@@ -1940,7 +2222,8 @@ int main(int argc, char **argv)
             success = 0;
         }
     } else {
-        success = run_event_loop(window, screen, chunky, &metrics, report_path);
+        success = run_event_loop(window, screen, chunky, &metrics, report_path, source_path,
+                           browse);
     }
 
 cleanup:
@@ -1982,6 +2265,7 @@ cleanup:
     if (graphicstest && !write_graphics_report(report_path, success)) {
         success = 0;
     }
+    if (browsertest && !write_browser_report(report_path, success)) { success = 0; }
     if (cubetest && !write_cube_report(report_path, success, cubepixeltest)) { success = 0; }
     return success ? RETURN_OK : RETURN_FAIL;
 }

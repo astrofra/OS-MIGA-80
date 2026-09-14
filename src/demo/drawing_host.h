@@ -8,7 +8,8 @@ struct BitMap;
 struct Screen;
 struct miga80_host_drawing;
 enum miga80_c2p_backend {
-    MIGA80_C2P_MASK32, MIGA80_C2P_KALMS, MIGA80_C2P_REFERENCE
+    MIGA80_C2P_MASK32, MIGA80_C2P_KALMS, MIGA80_C2P_REFERENCE,
+    MIGA80_C2P_DEFAULT = MIGA80_C2P_KALMS
 };
 struct miga80_c2p_stats {
     uint64_t ticks;

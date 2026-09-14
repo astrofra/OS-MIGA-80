@@ -16,7 +16,7 @@ MIGA80_CANDIDATE_REPORT="$MIGA80_RUN_DIR/candidate-report.txt"
 MIGA80_TEST_STARTUP="$MIGA80_RUN_DIR/Startup-Sequence.test"
 MIGA80_TIMEOUT_SECONDS="${MIGA80_FS_UAE_TIMEOUT_SECONDS:-45}"
 MIGA80_FAST_MEMORY="${MIGA80_FS_UAE_FAST_MEMORY:-0}"
-MIGA80_C2P_BACKEND="${MIGA80_C2P_BACKEND:-MASK32}"
+MIGA80_C2P_BACKEND="${MIGA80_C2P_BACKEND:-DEFAULT}"
 MIGA80_EMULATOR_PID=""
 
 stop_emulator() {
@@ -93,12 +93,16 @@ case "$MIGA80_FAST_MEMORY" in
     exit 1
     ;;
 esac
+MIGA80_C2P_ARGUMENT="C2P=$MIGA80_C2P_BACKEND"
 case "$MIGA80_C2P_BACKEND" in
+  DEFAULT) MIGA80_C2P_REPORT_NAME=default; MIGA80_C2P_ARGUMENT="" ;;
   MASK32) MIGA80_C2P_REPORT_NAME=mask32 ;;
   KALMS) MIGA80_C2P_REPORT_NAME=kalms ;;
   REFERENCE) MIGA80_C2P_REPORT_NAME=reference ;;
   *) printf 'Unknown C2P backend: %s\n' "$MIGA80_C2P_BACKEND" >&2; exit 1 ;;
 esac
+MIGA80_C2P_EXPECTED="$MIGA80_C2P_REPORT_NAME"
+if [ "$MIGA80_C2P_BACKEND" = DEFAULT ]; then MIGA80_C2P_EXPECTED=kalms; fi
 
 /bin/mkdir -p "$MIGA80_RUN_DIR" "$(dirname "$MIGA80_REPORT")"
 /bin/cp "$MIGA80_SOURCE_ADF" "$MIGA80_RUN_ADF"
@@ -111,14 +115,20 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
+  BROWSERTEST)
+    printf '%s\n' \
+      'SYS:MIGA80 SYS:demos/default.lua SYS:BOOTED.TXT BROWSERTEST' \
+      >"$MIGA80_TEST_STARTUP"
+    python3 "$MIGA80_PROJECT_ROOT/scripts/prepare-browser-test.py" "$MIGA80_RUN_ADF"
+    ;;
   CUBETEST|CUBEPIXELTEST)
     printf '%s\n' \
-      "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE C2P=$MIGA80_C2P_BACKEND" \
+      "MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA MIGA80:BOOTED.TXT $MIGA80_MODE $MIGA80_C2P_ARGUMENT" \
       >"$MIGA80_TEST_STARTUP"
     ;;
   AUTORUN|SELFTEST|STOPTEST|GRAPHICSTEST)
     printf '%s\n' \
-      "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE C2P=$MIGA80_C2P_BACKEND" \
+      "MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT $MIGA80_MODE $MIGA80_C2P_ARGUMENT" \
       >"$MIGA80_TEST_STARTUP"
     ;;
   GRAPHICSTEST_DIRECT)
@@ -174,6 +184,11 @@ for ((second = 0; second < MIGA80_TIMEOUT_SECONDS; ++second)); do
            /usr/bin/grep -Eq '^result=(pass|fail)$'; then
         break
       fi
+    elif [ "$MIGA80_MODE" = BROWSERTEST ]; then
+      if /usr/bin/grep -q '^miga80_browser_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
+         /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
+        break
+      fi
     elif [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
       if /usr/bin/grep -q '^miga80_cube_report=1$' "$MIGA80_CANDIDATE_REPORT" &&
          /usr/bin/tail -n 1 "$MIGA80_CANDIDATE_REPORT" | /usr/bin/grep -Eq '^result=(pass|fail)$'; then
@@ -226,7 +241,7 @@ if [ "$MIGA80_MODE" = CUBETEST ] || [ "$MIGA80_MODE" = CUBEPIXELTEST ]; then
   else
     /bin/cp "$MIGA80_REPORT" "$MIGA80_PROJECT_ROOT/build/reports/cube-fs-uae.txt"
   fi
-  python3 - "$MIGA80_REPORT" "$MIGA80_C2P_BACKEND" "$MIGA80_MODE" "$MIGA80_SOURCE_ADF" "$MIGA80_FAST_MEMORY" <<'PY_CHECK'
+  python3 - "$MIGA80_REPORT" "$MIGA80_C2P_EXPECTED" "$MIGA80_MODE" "$MIGA80_SOURCE_ADF" "$MIGA80_FAST_MEMORY" "$MIGA80_C2P_REPORT_NAME" <<'PY_CHECK'
 import hashlib, json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
@@ -246,7 +261,7 @@ if sys.argv[3] == 'CUBEPIXELTEST':
         print(f"{values['c2p_backend']} sample {sample}: {v['frames']} frames, "
               f"{v['elapsed_q16']/65536:.4f} s, C2P mean "
               f"{1000*v['c2p_ticks']/v['c2p_calls']/v['eclock_hz']:.3f} ms")
-    p.with_name(f'cube-chunky-{values["c2p_backend"]}-fs-uae.json').write_text(json.dumps({
+    p.with_name(f'cube-chunky-{sys.argv[6]}-fs-uae.json').write_text(json.dumps({
         'adf_sha256': hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest(),
         'fast_kib': int(sys.argv[5]), 'chip_kib': 2048, 'accuracy': 1, 'model': 'A1200 PAL'
     }, indent=2) + '\n')
@@ -294,4 +309,10 @@ if [ "$MIGA80_MODE" = GRAPHICSTEST ] || [ "$MIGA80_MODE" = GRAPHICSTEST_DIRECT ]
   /bin/cp "$MIGA80_REPORT" \
     "$MIGA80_PROJECT_ROOT/build/reports/$MIGA80_GRAPHICS_REPORT"
   printf 'PASS  native PLANAR blitter and PIXEL CPU match reference and both playfields\n'
+fi
+
+if [ "$MIGA80_MODE" = BROWSERTEST ]; then
+  /bin/cp "$MIGA80_REPORT" \
+    "$MIGA80_PROJECT_ROOT/build/reports/release-browser-fs-uae.txt"
+  printf 'PASS  SYS: browser, mouse/keyboard loading, errors, execution and cleanup\n'
 fi

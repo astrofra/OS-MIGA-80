@@ -84,6 +84,22 @@ static void draw_text(uint8_t *pixels, size_t stride, size_t column,
     }
 }
 
+void miga80_source_view_draw_row(uint8_t *pixels, size_t stride, size_t row,
+    const char *text, uint8_t foreground, uint8_t background)
+{
+    size_t length = 0U;
+    if (pixels == NULL || text == NULL || stride < MIGA80_SOURCE_VIEW_WIDTH ||
+        row >= MIGA80_SOURCE_VIEW_ROWS) {
+        return;
+    }
+    while (length < MIGA80_SOURCE_VIEW_COLUMNS && text[length] != '\0') {
+        ++length;
+    }
+    fill_rows(pixels, stride, row * MIGA80_FONT4X8_HEIGHT,
+              MIGA80_FONT4X8_HEIGHT, background & 15U);
+    draw_text(pixels, stride, 0U, row, text, length, foreground & 15U);
+}
+
 static enum Miga80SourceViewStatus validate_source(
     const char *source, size_t source_size, struct Miga80SourceViewMetrics *metrics)
 {

@@ -2,6 +2,14 @@
 
 Fantasy OS for the Amiga 1200
 
+The reference distribution is [release/miga80.adf](release/miga80.adf), a
+bootable development preview containing all four Lua demos in `SYS:demos`.
+Its graphical selector supports mouse selection, double-click loading, folder
+navigation and pagination. F2 / **OPEN** reopens it, F5 runs the source, ESC
+stops or returns, and CTRL-Q exits. Build with `gmake release`; validate with
+`gmake release-fs-uae`. The ADF and payload manifest are kept in `release/`
+for version control. See [distribution instructions](release/README.md).
+
 The first hosted AmigaOS bootstrap can be built and tested from macOS with:
 
 ```sh
@@ -25,8 +33,8 @@ with direct blitter drawing, synchronized double buffering and a ten-second
 animation. Build its autoboot disk with `gmake miga80-cube-adf`; see
 [cube animation and runtime](documentation/MIGA-80-cube-animation.md).
 
-The chunky cube now uses our mask32 68020 C2P by default, with a selectable
-Kalms adaptation and scalar reference. `gmake miga80-cube-c2p-compare` runs
+The chunky cube uses the Kalms 68020 C2P adaptation by default, selected on
+2026-09-14. Our mask32 assembly and scalar reference remain selectable for comparison. `gmake miga80-cube-c2p-compare` runs
 the three backends on the same ADF; see the [comparison and measurements](documentation/MIGA-80-c2p-runtime-comparison.md).
 `gmake miga80-cube-chunky-kalms-adf` builds the Kalms autoboot variant.
 

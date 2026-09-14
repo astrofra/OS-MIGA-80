@@ -426,10 +426,10 @@ COMPILER_CALL_ENCODER_EXPECTED := \
 COMPILER_CALL_MUSASHI_EXPECTED := \
 	tests/execute/call-survival.expected
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
-MIGA80_DEMO_SOURCE := src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
+MIGA80_DEMO_SOURCE := src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
 	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/c2p4_reference.c \
 	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
-MIGA80_DEMO_HEADERS := src/demo/supervisor.h src/demo/stop_test.h \
+MIGA80_DEMO_HEADERS := src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
 	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/runtime_guarded.S src/demo/drawing_bridge.S \
 	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
@@ -1463,3 +1463,19 @@ build/distribution/miga80-cube-chunky-kalms.adf: $(MIGA80_DEMO_PROGRAM) assets/d
 	$(MIGA80_DEMO_ADF_BUILDER) $(MIGA80_DEMO_PROGRAM) assets/demo/cube-chunky.lua \
 		$(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Cube-Kalms $(MIGA80_DEMO_README) \
 		LICENSE $@ assets/demo/layers.lua assets/demo/cube-chunky.lua
+
+# Reference distribution: all demo assets, a SYS: browser, no benchmark fixtures.
+MIGA80_RELEASE_DEMOS := $(sort $(wildcard assets/demo/*.lua))
+MIGA80_RELEASE_ADF := release/miga80.adf
+MIGA80_RELEASE_MANIFEST := release/miga80.manifest.json
+.PHONY: release release-fs-uae
+release: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
+$(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIGA80_RELEASE_DEMOS) assets/demo \
+        $(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Browser $(MIGA80_DEMO_README) \
+        LICENSE third_party/kalms-c2p/readme.txt scripts/build-miga80-release.py
+	$(PYTHON) scripts/build-miga80-release.py $(MIGA80_DEMO_PROGRAM) \
+		$(FONT4X8_GENERATED_BINARY) $(MIGA80_RELEASE_ADF)
+
+release-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \
+		tests/smoke/source-view-adf/browser-expected.txt BROWSERTEST

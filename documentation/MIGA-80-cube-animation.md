@@ -147,8 +147,9 @@ sur A1200 reste attendu ; aucune cadence sur machine réelle n’est encore vali
 animation sur deux axes, avec une seule différence : `layer(PIXEL)` remplace
 `layer(PLANAR)`. `cls()` efface le tampon chunky sur le CPU, `line()` utilise
 Bresenham CPU et chaque `flip()` convertit les 65 536 pixels vers PF1 dans le
-bitmap caché. La conversion utilise désormais notre assembleur mask32 ;
-`C2P=KALMS` sélectionne l'adaptation Kalms, `C2P=REFERENCE` la référence C.
+bitmap caché. La conversion utilise par défaut l'adaptation Kalms, choix validé
+le 14 septembre 2026. `C2P=MASK32` sélectionne notre assembleur mask32,
+`C2P=REFERENCE` la référence C.
 Voir [l'intégration et la comparaison C2P](MIGA-80-c2p-runtime-comparison.md).
 
 ```sh
@@ -168,8 +169,7 @@ et guarded font toujours 1 540 / 1 600 octets, avec une borne de pile de
 1 164 octets. Le profil ADF `CUBEPIXELTEST` contrôle PF1 par lecture des pixels
 AGA après C2P, PF2 vide, zéro ligne blitter, les échanges de buffers, les arrêts
 ESC et les relances. La lecture de contrôle intervient après capture de la durée. L’injection ESC
-est programmée après six secondes pour atteindre plusieurs images avec cette
-conversion lente ; le profil PLANAR garde son délai de 0,5 seconde.
+reste programmée après six secondes pour couvrir aussi le témoin C lent ; le profil PLANAR garde son délai de 0,5 seconde.
 
 Rapports : `build/reports/animation-chunky-host.txt` et
 `build/reports/cube-chunky-fs-uae.txt`. Les mesures restent celles de FS-UAE,
@@ -191,4 +191,5 @@ lecture de contrôle des pixels et sans croissance mémoire. Capture :
 La comparaison actuelle retrouve 5 images avec la référence, 40 avec notre
 ASM mask32 et 83 avec l'adaptation Kalms, sur deux exécutions par backend.
 Le disque `build/distribution/miga80-cube-chunky-kalms.adf` démarre Kalms ;
-`miga80-cube-chunky.adf` utilise mask32. Tous deux conservent le même Lua.
+`miga80-cube-chunky.adf` utilise également Kalms par défaut. Tous deux
+conservent le même Lua.

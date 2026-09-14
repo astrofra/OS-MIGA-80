@@ -1,0 +1,82 @@
+{
+  "format": "miga80-reference-adf-1",
+  "edition": "development preview",
+  "adf": "miga80.adf",
+  "adf_bytes": 901120,
+  "adf_sha256": "e60fa778c663a26f30b272636ea381dc4b63e92c51234535cffb6959ea8b61ca",
+  "filesystem": "OFS",
+  "volume": "MIGA80",
+  "startup": "SYS:demos file selector",
+  "runtime_report": "RAM:MIGA80-BOOTED.TXT",
+  "files": {
+    "MIGA80": {
+      "source": "build/amiga/source-view/miga80",
+      "bytes": 124180,
+      "sha256": "891f42046cc6cb6b74a60307a19e9907fb28305fae239839379369d405bbccd6"
+    },
+    "S/Startup-Sequence": {
+      "source": "assets/demo/Startup-Browser",
+      "bytes": 62,
+      "sha256": "00238bcc54166a6c88310980a4e1f9db022e6b1043edf7044fe1fe7b519122d1"
+    },
+    "DATA/FONT4X8.BIN": {
+      "source": "build/generated/FONT4X8.BIN",
+      "bytes": 780,
+      "sha256": "9ebcdda877ffe2c58cec2c179a8df0aa6ffa76354378d59f1e1d680ead0d7ef5"
+    },
+    "README.TXT": {
+      "source": "assets/demo/README.TXT",
+      "bytes": 4597,
+      "sha256": "9ae0e8b738b4e9c9f1a1cc93ceace28591c71c2df0b3c884de68e19229b18bfe"
+    },
+    "LICENSE.TXT": {
+      "source": "LICENSE",
+      "bytes": 1074,
+      "sha256": "51ae3876c9133cd8f80139f7e063067fadca0fc571e6550c706fdeca1dacdf31"
+    },
+    "KALMS.TXT": {
+      "source": "third_party/kalms-c2p/readme.txt",
+      "bytes": 2470,
+      "sha256": "c71c4bec237c5060d0122cbe9869c03ee472b1e80562e8f6834ba80625f852d0"
+    },
+    "demos/cube-chunky.lua": {
+      "source": "assets/demo/cube-chunky.lua",
+      "bytes": 948,
+      "sha256": "642f4fc0745432f34a2597131ba5a6f8878b5c7e9195646fe181effa094519a3"
+    },
+    "demos/cube.lua": {
+      "source": "assets/demo/cube.lua",
+      "bytes": 949,
+      "sha256": "d4a4234adf1e6eb20810b31eb67ada7043de10943230c92dbc5bf08db8cff656"
+    },
+    "demos/default.lua": {
+      "source": "assets/demo/default.lua",
+      "bytes": 643,
+      "sha256": "827671f3ca355a570d51ba83e99206bd4c3d1959d502a8c2596dd5aedf2d2f04"
+    },
+    "demos/layers.lua": {
+      "source": "assets/demo/layers.lua",
+      "bytes": 406,
+      "sha256": "ee91090d78d14118c128b8f930c450c1b9873fa489709c52baf06dc2cb48d3b4"
+    }
+  },
+  "filesystem_listing": [
+    "MIGA80                                           VOLUME  --------  14.09.2026 08:11:05.00  DOS0:ofs #512",
+    "  DATA                                              DIR  ----rwed  14.09.2026 08:11:05.00  ",
+    "    FONT4X8.BIN                                     780  ----rwed  14.09.2026 08:11:05.00  ",
+    "  demos                                             DIR  ----rwed  14.09.2026 08:11:05.00  ",
+    "    cube-chunky.lua                                 948  ----rwed  14.09.2026 08:11:05.00  ",
+    "    cube.lua                                        949  ----rwed  14.09.2026 08:11:05.00  ",
+    "    default.lua                                     643  ----rwed  14.09.2026 08:11:05.00  ",
+    "    layers.lua                                      406  ----rwed  14.09.2026 08:11:05.00  ",
+    "  KALMS.TXT                                        2470  ----rwed  14.09.2026 08:11:05.00  ",
+    "  LICENSE.TXT                                      1074  ----rwed  14.09.2026 08:11:05.00  ",
+    "  MIGA80                                         124180  ----rwed  14.09.2026 08:11:05.00  ",
+    "  README.TXT                                       4597  ----rwed  14.09.2026 08:11:05.00  ",
+    "  S                                                 DIR  ----rwed  14.09.2026 08:11:05.00  ",
+    "    Startup-Sequence                                 62  ----rwed  14.09.2026 08:11:05.00  ",
+    "sum:           301  150Ki        154112",
+    "data:          284  142Ki        145408  94.35%",
+    "fs:             17  8.5Ki          8704   5.65%"
+  ]
+}

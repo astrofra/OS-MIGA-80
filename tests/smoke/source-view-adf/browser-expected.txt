@@ -1,0 +1,16 @@
+miga80_browser_report=1
+sys_demos_scan_sort=pass
+mouse_select_double_click=pass
+all_four_demos_load=pass
+loaded_source_f5=pass
+result_escape=pass
+f2_mouse_reopen=pass
+folders_filter_pagination=pass
+invalid_missing_large_preserve_source=pass
+empty_directory=pass
+parent_sys_root=pass
+cancel_preserves_source=pass
+memory_no_growth=pass
+ctrl_q_exit=pass
+hosted_cleanup=pass
+result=pass

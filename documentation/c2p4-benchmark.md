@@ -2,10 +2,10 @@
 
 **Status:** Reference, pair-LUT C99/68020, table-free mask32 C99/68020, staged blitter-publication control, and the report-format-3 exclusive display/DMA/memory wrapper implemented; native, 204-case stock FS-UAE, and 260-case Fast-assisted FS-UAE protocols pass
 
-**Decision authority:** Correctness is byte-exact on the host and under FS-UAE. Layout and performance decisions remain blocked on a physical stock PAL A1200.
+**Decision authority:** Correctness is byte-exact on the host and under FS-UAE. Kalms was selected as the runtime default on 2026-09-14. Physical throughput certification and layout decisions still require stock PAL A1200 measurements.
 
-The animated runtime now uses mask32 assembly by default and includes a
-selectable Kalms adaptation. Its same-ADF, double-buffered cube comparison is
+The animated runtime uses the Kalms assembly adaptation by default; mask32
+and the scalar reference remain selectable. Its same-ADF, double-buffered cube comparison is
 documented separately in [Runtime C2P comparison](MIGA-80-c2p-runtime-comparison.md).
 The historical benchmark matrices below retain their original scope and results.
 

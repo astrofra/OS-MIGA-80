@@ -323,6 +323,7 @@ struct miga80_host_drawing *miga80_host_drawing_create(
     if (drawing == NULL) {
         return NULL;
     }
+    drawing->backend = MIGA80_C2P_DEFAULT;
     drawing->request_bit = AllocSignal(-1);
     drawing->owner = FindTask(NULL);
     drawing->storage = AllocMem(4U * MIGA80_DRAW_PLANE_BYTES,

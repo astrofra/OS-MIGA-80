@@ -1,12 +1,13 @@
 # C2P du runtime : mask32 et Kalms
 
-Le runtime utilise désormais notre assembleur `mask32` pour convertir PIXEL
-vers les quatre plans PF1, dans le tampon caché comme lors de la publication
+Kalms est le C2P retenu pour le runtime, décision validée le 14 septembre 2026.
+Son adaptation assembleur convertit PIXEL vers les quatre plans PF1,
+dans le tampon caché comme lors de la publication
 du résultat. Le source Lua, le buffer byte4 de 64 Kio et la conversion complète
 256 × 256 restent identiques. PLANAR continue d'utiliser le blitter directement.
 
-Trois choix sont disponibles dans le même exécutable : `C2P=MASK32` (défaut),
-`C2P=KALMS` et `C2P=REFERENCE`. Sur l'ADF chunky, depuis le Shell :
+Trois choix sont disponibles dans le même exécutable : `C2P=KALMS` (défaut),
+`C2P=MASK32` et `C2P=REFERENCE`. Sur l'ADF chunky, depuis le Shell :
 
 ```text
 MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA RAM:CUBE.TXT CUBE C2P=KALMS
@@ -17,7 +18,9 @@ La référence C reste un témoin de correction et de comparaison.
 
 `gmake miga80-cube-chunky-kalms-adf` produit
 `build/distribution/miga80-cube-chunky-kalms.adf`, qui sélectionne Kalms au
-démarrage. `miga80-cube-chunky.adf` utilise mask32.
+démarrage. `miga80-cube-chunky.adf` utilise également Kalms, sans argument
+de sélection. Les retours physiques restent attendus pour certifier la cadence ;
+le choix du backend est acté et pourra évoluer si une meilleure solution est mesurée.
 
 ## Adaptation Kalms
 
@@ -60,6 +63,13 @@ sur trois cycles chacun : mélange de pset/line/effacement dans PF1 et PF2,
 clipping et octants, palette Copper, retour source et ressources libérées.
 Les checksums restent `003971a5` (PIXEL) et `4235248a` (PLANAR).
 Rapports : `build/reports/source-view-adf-graphics-{mask32,kalms}-fs-uae.txt`.
+
+Sans variable `MIGA80_C2P_BACKEND`, le test ADF n'envoie aucun argument
+`C2P=...` et exige que le runtime annonce `kalms`. Le rapport de ce cas est
+`build/reports/cube-chunky-default-fs-uae.txt`, avec sa configuration JSON,
+pour conserver les mesures de comparaison antérieures. Ce lancement sans
+sélecteur passe le contrôle des pixels, trois arrêts ESC et deux exécutions
+complètes, avec retour source, relance et libération des ressources.
 
 La comparaison FS-UAE exécute successivement la référence, mask32 puis Kalms
 avec **le même ADF** : A1200 PAL, accuracy 1, 2 Mio Chip, sans Fast par défaut.

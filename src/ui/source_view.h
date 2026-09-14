@@ -38,6 +38,10 @@ enum Miga80SourceViewStatus miga80_source_view_render_with_status(
 enum Miga80SourceViewStatus miga80_source_view_draw_status(
     uint8_t *pixels, size_t stride, const char *status_text);
 
+/* One clipped 64-column row, also used by the hosted file selector. */
+void miga80_source_view_draw_row(uint8_t *pixels, size_t stride, size_t row,
+    const char *text, uint8_t foreground, uint8_t background);
+
 uint32_t miga80_source_view_checksum(const void *bytes, size_t size);
 
 #endif

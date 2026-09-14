@@ -1,90 +1,87 @@
-MIGA-80 LUA GRAPHICS DEMOS
+MIGA-80 LUA GRAPHICS DEMOS - DEVELOPMENT PREVIEW
 
-Boot this disk on a PAL Amiga 1200 with Kickstart 3.0 or 3.1.
-MIGA-80 starts automatically and displays the complete default MIGA Lua
-source with the project 4x8 bitmap font.
+Boot release/miga80.adf on a PAL Amiga 1200 with 2 MiB Chip RAM and
+Kickstart 3.0 or 3.1. No Fast RAM is required. This reference floppy opens
+the graphical file selector at SYS:demos. It includes all four Lua demos:
 
-MIGA-80 checks the 68020 CPU requirement before compiling. F5 runs the
-compiler on a private 32 KiB stack, independently of the boot Shell stack.
-Runtime diagnostics are written to RAM:MIGA80-BOOTED.TXT, so normal use does
-not modify this floppy image.
+  default.lua       Mandelbrot fractal, chunky pixels.
+  layers.lua        Lines and pixels on both playfields.
+  cube.lua          Ten-second 3D wireframe cube, direct blitter lines.
+  cube-chunky.lua   Same cube, CPU lines and Kalms C2P.
 
-The source view is read-only. Press F5 to parse and lower the displayed source,
-optimize its value IR with the bounded O1 register plan, emit native 68020 code
-directly into memory, and execute it. The generated program draws the
-Mandelbrot image through pset. Press Esc on the result to return to the source,
-then Ctrl-Q to close MIGA-80. Errors also return to the source with Esc.
-Generated execution uses a separate guarded 4 KiB stack and stops with a
-source-located error if its loop budget is exhausted.
+OPENING A DEMO
 
-During execution, Esc stops the program and returns directly to the source.
-Esc never closes the application. Press Ctrl-Q to quit from the source, result,
-or error screen. The shortcut follows the AmigaOS keyboard layout. A separate
-Exec task makes the stop independent of loop-budget
-checks. It relies on working AmigaOS scheduling and interrupts; it cannot
-recover arbitrary system corruption. Compilation itself is not interrupted.
+Click a file once to select it. Double-click, Return, or the OPEN button
+loads it into the source view. Loading does not execute the program.
+Folders open in the same way. SYS: returns to the boot volume root;
+PARENT or Backspace goes up one folder. REFRESH reads the directory again.
+PREV PAGE / NEXT PAGE browse long lists; Up/Down selects with the keyboard.
+The list shows folders and .lua files, sorted with folders first.
+ESC or CANCEL returns to the previous source without changing it.
 
-Supervision is on by default. For a direct-execution development comparison:
-MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA RAM:MIGA80-BOOTED.TXT NOSUPERVISOR
-The loop budget remains active. SUPERVISOR explicitly enables supervision.
+The source view is read-only. F2 or its top-right OPEN button reopens the
+selector. F5 compiles and runs the displayed source. ESC returns from the
+result or error screen, and stops a running demo. CTRL-Q closes MIGA-80.
+The shortcut follows the AmigaOS keyboard layout. No files are saved or
+modified by the selector. Runtime diagnostics go to RAM:MIGA80-BOOTED.TXT;
+normal use does not write to this floppy.
 
-The source is stored in DATA/DEFAULT.LUA. FONT4X8.BIN is the deterministic
-runtime export of the freely licensed project font in works/ID.
+This preview displays at most 30 source lines, 64 columns per line, and
+4096 bytes. Sources must be printable ASCII with LF newlines. An unreadable,
+oversized or unsupported source leaves the previous source intact and shows
+an error in the selector. Directories over 4096 entries are rejected without
+replacing the previous listing. Long names are shortened on screen only.
 
-DRAWING ON BOTH LAYERS
+RUNTIME
 
-PIXEL is selected at the start of each run. layer(PIXEL) selects the chunky
-buffer, displayed in PF1/front after C2P. layer(PLANAR) selects four native
-bitplanes, displayed in PF2/back. Both accept pset(x,y,color) and
-line(x0,y0,x1,y1,color), with coordinates in 0..255 and colors in 0..15.
+MIGA-80 checks the 68020 requirement before compiling. F5 runs the compiler
+on a private 32 KiB stack, emits native code directly, and executes it on a
+separate guarded 4 KiB stack. A loop budget catches runaway loops. The Exec
+task supervisor also lets ESC stop generated code independently of budget
+checks. Compilation itself is not interrupted. Supervision relies on working
+OS scheduling and interrupts; it cannot recover arbitrary system corruption.
+
+From the Shell, reopen the selector:
+SYS:MIGA80
+Or open a particular source:
+SYS:MIGA80 SYS:demos/layers.lua RAM:MIGA80-BOOTED.TXT
+SUPERVISOR is the default. NOSUPERVISOR is a development-only CLI option
+following the report path. C2P=MASK32 and C2P=REFERENCE select comparison
+converters; C2P=KALMS explicitly selects the default.
+
+DRAWING AND ANIMATION
+
+layer(PIXEL) selects the chunky PF1/front buffer; layer(PLANAR) selects the
+four native PF2/back bitplanes. PIXEL is initially selected. pset(x,y,color)
+and line(x0,y0,x1,y1,color) accept coordinates 0..255 and colors 0..15.
 Lines are clipped; out-of-range pixels and colors above 15 are ignored.
-Zero on PIXEL reveals PLANAR. Zero on PLANAR is the base/backdrop color.
+Zero on PIXEL reveals PLANAR. Zero on PLANAR is the backdrop color.
 
-PIXEL lines use CPU Bresenham. PLANAR lines program the blitter registers
-directly. The owner takes the blitter once per batch of at most 16 commands,
-suspends task switching during that batch, waits for DMA completion, and
-returns the resource. Interrupts stay active so Esc can be delivered. PLANAR
-pset uses CPU bit writes in the same command order. The worker owns no DMA.
+PIXEL lines use CPU Bresenham. PLANAR lines use direct blitter registers.
+The owner takes the blitter for batches of at most 16 commands, suspends
+task switching for each batch, waits for completion, and returns it.
+Interrupts remain active. PLANAR pset uses CPU bit writes in command order.
 
-After Ctrl-Q, load the two-layer example from the Shell and press F5:
-MIGA80:MIGA80 MIGA80:DATA/LAYERS.LUA RAM:MIGA80-BOOTED.TXT
+sin(fix) and cos(fix) use radians and signed Q16.16. cls(u8) clears the
+selected layer. flip() publishes the hidden bitmap and waits until the
+previous bitmap is safe to draw into. Clear each PLANAR frame explicitly;
+flip does not clear or copy it. time() returns fix seconds since the first
+published frame, or zero before it. Double buffering uses another 128 KiB
+of Chip RAM and preserves the source screen. ESC works during buffer waits.
 
-ANIMATED LUA CUBE
+Both cubes rotate on X and Y with depth shading for ten seconds. The chunky
+variant converts the entire framebuffer to PF1 at each flip. Kalms is the
+default C2P, selected on 2026-09-14. Physical A1200 timings remain pending;
+FS-UAE comparisons are documented in the source repository.
 
-The dedicated miga80-cube.adf boots DATA/CUBE.LUA automatically: a fullscreen
-wireframe cube rotating on X and Y, direct blitter lines, four depth shades,
-for ten seconds. X rotates at 0.55 rad/s and Y at 0.8 rad/s.
-The source returns afterward. F5 replays, Esc stops, Ctrl-Q exits.
-Both disks include this source. From the Shell:
-MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA RAM:MIGA80-BOOTED.TXT CUBE
+The older source-view and cube autoboot ADFs under build/distribution are
+development/test variants. Their compatibility paths remain DATA/DEFAULT.LUA,
+DATA/LAYERS.LUA and DATA/CUBE.LUA. release/miga80.adf is the reference disk.
 
-sin(fix) and cos(fix) use radians and return signed Q16.16 values. cls(u8)
-clears the selected layer. flip() publishes the completed hidden bitmap and
-waits until the previous bitmap can be drawn into. Start each PLANAR frame
-with cls(0); flip does not clear it or copy the previous image. time() returns
-fix seconds since the first displayed frame, or zero before the first flip.
-The two animation bitmaps require another 128 KiB of Chip RAM. The editor's
-original bitmap is preserved. Esc also works while waiting for a buffer swap.
+CREDITS
 
-CHUNKY CUBE COMPARISON
-
-miga80-cube-chunky.adf boots the same cube using layer(PIXEL). On that disk,
-DATA/CUBE.LUA and DATA/DEFAULT.LUA contain the chunky variant. CPU Bresenham
-replaces blitter lines; flip converts the whole chunky frame to PF1. The
-default converter now uses our mask32 68020 assembly.
-F5 replays, Esc stops and Ctrl-Q exits as usual.
-
-miga80-cube-chunky-kalms.adf boots the same Lua source with the Kalms C2P
-adaptation. Both converters are in the same executable. From the Shell:
-MIGA80:MIGA80 MIGA80:DATA/CUBE.LUA RAM:CUBE.TXT CUBE C2P=KALMS
-Use C2P=MASK32 or C2P=REFERENCE for the other backends.
-
-FS-UAE PAL A1200 / 2 MiB Chip / no Fast, two runs per backend:
-reference C: 5 frames in 10.42 s, about 2526 ms per full C2P;
-our mask32: 40 frames in 10.16 s, about 179 ms per full C2P;
-Kalms adaptation: 83 frames in 10.02-10.10 s, about 49 ms per full C2P.
-These are emulator results; physical A1200 measurements remain pending.
-
+MIGA-80 and the project 4x8 bitmap font: see LICENSE.TXT.
 Kalms C2P by Mikael Kalms, Public Domain, adapted from c2p1x1_4_c5_bm.s.
-Original source and notice: https://github.com/Kalmalyzer/kalms-c2p
-The source repository preserves the upstream files in third_party/kalms-c2p.
+Original notice: KALMS.TXT. Source: https://github.com/Kalmalyzer/kalms-c2p
+The repository preserves the original source in third_party/kalms-c2p.
+No Kickstart ROM or Workbench files are included on this disk.
