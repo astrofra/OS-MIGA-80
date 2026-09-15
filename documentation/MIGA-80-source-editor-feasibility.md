@@ -1,13 +1,26 @@
 # MIGA-80 Source Editor — Feasibility and Token Budget
 
 - **Date:** 2026-09-15
-- **Status:** Implementation proposal; no editor implementation or hardware validation performed for this study.
+- **Status:** W1–W6 implemented on the existing 256 × 256 LORES display; W7–W10 remain proposals. No HIRES editor display or physical-hardware validation has been performed.
 - **Repository baseline:** `61d9840`
 - **Target:** PAL Amiga 1200, 68EC020, AGA, 2 MiB Chip RAM, no Fast RAM; the existing AmigaOS-hosted application.
 
 ## 1. Conclusion
 
-The requested editor is feasible within the current architecture:
+The portable editor and hosted file-workflow milestone, ranks **W1 through
+W6**, is now implemented within the current architecture:
+
+- The fixed-capacity document supports insertion, deletion, cursor movement,
+  vertical/horizontal scrolling and a 16 KiB source limit.
+- Layout-aware text input, Shift+arrow selection, and the internal
+  Ctrl+C/Ctrl+X/Ctrl+V clipboard are wired into the IDCMP loop.
+- Transactional Load, Save and Save As are available, including dirty-document
+  and overwrite confirmation. Loads accept tabs, normalize CRLF to LF, and are
+  no longer limited by viewport rows or columns.
+- The editable view currently uses the existing **256 × 256 LORES** screen and
+  4 × 8 font. **No HIRES display work is included in this checkpoint.**
+
+The remaining display/runtime proposal is still feasible:
 
 - A **512 × 256 HIRES, four-colour editor** needs **32 KiB of planar display memory**.
 - The existing **256 × 256 LORES runtime** uses eight bitplanes arranged as two four-plane playfields: **64 KiB per complete display buffer**.
@@ -16,7 +29,7 @@ The requested editor is feasible within the current architecture:
 
 The largest engineering cost is **changing display ownership and restoring the editor reliably**, especially during stopped animation or failed screen creation. Text operations are more contained. Reusing buffers is a credible design, but must first pass a small on-target prototype.
 
-**Planning estimate:** **75–132 thousand development tokens**, or approximately **95–165 thousand with a 25% contingency**, for the complete scope including shared video memory and integration tests. These are provisional effort estimates, not measured consumption or a billing quote. Section 3 ranks the work from least to most complex.
+**Original planning estimate:** **75–132 thousand development tokens**, or approximately **95–165 thousand with a 25% contingency**, for the complete scope including shared video memory and integration tests. These are provisional effort estimates, not measured consumption or a billing quote. Section 3 retains the original complexity ranking; it is not a record of actual consumption.
 
 This is a deliberately smaller editor milestone than the full [product roadmap](MIGA-80-specification-and-roadmap.md), which also requires undo/redo, search and other commands. It proposes HIRES for source editing as requested, revising the roadmap's initial 256 × 256 UI assumption. It does not complete the roadmap's hardware certification gates.
 
@@ -26,10 +39,10 @@ The implementation was inspected directly; older documentation sometimes describ
 
 | Area | Current implementation | Consequence for the editor |
 | --- | --- | --- |
-| Source display | [source_view.c](../src/ui/source_view.c) and [source_view.h](../src/ui/source_view.h): read-only 256 × 256, 4 × 8 font, 64 columns, 30 source rows. | Build a scrolling editor renderer; screen dimensions must cease to be document limits. |
-| Source loading | [demo/main.c](../src/demo/main.c): 4,096-byte source and staging buffers; loading validates through the source renderer. | Keep transactional loading, but validate document encoding and capacity independently of rendering. |
-| File selection | [file_picker.c](../src/demo/file_picker.c): directory navigation, pagination, keyboard and mouse actions; 512-byte path storage. | Reuse the directory model; adapt its rendering and hit areas to HIRES. Add filename entry for Save As. |
-| Input | `demo/main.c`: IDCMP raw keys and mouse buttons; `MapRawKey` already makes Ctrl+Q follow the active layout. | Add text translation, editing commands, Shift selection and clipboard shortcuts. |
+| Source display | [source_view.c](../src/ui/source_view.c) and [source_view.h](../src/ui/source_view.h): editable, scrolling 256 × 256 LORES viewport with cursor and selection using the 4 × 8 font. | Replace only the display/rendering layer for W7; document dimensions are already independent of the viewport. |
+| Source loading | [demo/main.c](../src/demo/main.c): transactional 16 KiB source and staging buffers; CRLF normalization and encoding/capacity validation are independent of rendering. | Retain these semantics when later display work lands. |
+| File selection | [file_picker.c](../src/demo/file_picker.c): directory navigation, pagination, keyboard and mouse actions, Save As filename entry and 512-byte path storage. | Adapt rendering and hit areas to HIRES only in W7. |
+| Input | [editor.c](../src/ui/editor.c) and `demo/main.c`: layout-aware translated text, editing commands, Shift selection, internal clipboard, one-shot command filtering and repeatable editing actions. Translation occurs before replying to IDCMP messages. | Retain this portable command layer across later screen transitions. |
 | Compile/run/stop | `demo/main.c` and [supervisor.c](../src/demo/supervisor.c): compile on a guarded stack, execute in a supervised task, stop with Esc. | Compile the live document and separate compile, display transition, execution and restoration. |
 | Display | `demo/main.c`: one Intuition-owned eight-plane LORES screen for source, browser and result. | Introduce distinct HIRES editor and LORES runtime display configurations. |
 | Animation | [animation.c](../src/demo/animation.c): original screen plus two allocated animation buffers; assumes depth 8 and 32 bytes per row. | Convert to two borrowed runtime buffers, with explicit ownership and completion signals. |
@@ -40,6 +53,19 @@ The compiler accepts a source pointer and length, but still has independent limi
 The current runtime remains hosted by AmigaOS. Switching resolution does not implement the future exclusive runtime, and `SA_Exclusive` on an Intuition screen is not exclusive ownership of scheduling and hardware.
 
 ## 3. Work ranked by complexity and token cost
+
+### Implementation checkpoint
+
+| Rank / ID | Current status |
+| --- | --- |
+| 1 / W1 | Implemented: layout-aware text decoding and command dispatch. |
+| 2 / W2 | Implemented: bounded internal copy, transactional cut and paste. |
+| 3 / W3 | Implemented: fixed-anchor Shift+arrow selection with LORES visual feedback and scrolling. |
+| 4 / W4 | Implemented: staged 16 KiB load, encoding validation, CRLF normalization and dirty-document protection. |
+| 5 / W5 | Implemented: Save, Save As, overwrite confirmation, checked publication through temporary/backup names, and recoverable failure reporting. |
+| 6 / W6 | Implemented and host-tested: contiguous document model, insertion/deletion, cursor, preferred column and scrolling. |
+| 7 / W7 | Deferred: no HIRES screen or four-colour planar editor renderer in this checkpoint. |
+| 8–10 / W8–W10 | Deferred except for focused W1–W6 integration coverage inside the existing release/browser regression. |
 
 ### Estimation convention
 
@@ -65,7 +91,7 @@ The rows are **incremental**: a feature's estimate assumes its listed dependenci
 
 If the sharing prototype fails, the same editor commands remain feasible with separate persistent video buffers. This removes only the aliasing-specific part of W10: W9 and the two-buffer animation refactor are still needed for the 264 KiB fallback described below. Re-estimate that reduced package after the prototype instead of subtracting all of W10. The fallback still reduces repeated video allocations, but consumes more memory and does not achieve editor/runtime aliasing.
 
-## 4. HIRES display and text layout
+## 4. Planned HIRES display and text layout (W7, not implemented)
 
 ### Mode and geometry
 
@@ -258,6 +284,16 @@ File operations remain in hosted mode. The boot disk may be full or write-protec
 4. **Make documents persistent — W4 and W5.** Adapt the browser, add Save/Save As and modified-document handling. Test failure paths before using valuable files.
 5. **Integrate execution — finish W9 and W10.** Compile unsaved text, use the two-buffer runtime, preserve the LORES result view, restore HIRES on Esc/fault and adapt the boot intro's existing animation use.
 6. **Validate the complete workflow — W8.** Extend emulator/release regressions and perform stock-A1200 checks. Update the roadmap and user instructions when the implementation lands.
+
+### Implemented W1–W6 validation
+
+`gmake editor-test source-view-test miga80-demo` exercises the portable editor
+under address/undefined-behaviour sanitizers, the scrolling LORES renderer, and
+the warnings-as-errors Amiga cross-build. `gmake release-fs-uae` additionally
+boots the reference ADF and covers long-line/many-row loading, Shift selection,
+internal copy/cut/paste, Save As to `RAM:`, overwrite confirmation,
+dirty-document cancellation, Save-before-quit, native execution and cleanup.
+The reference ADF remains LORES throughout.
 
 ### Acceptance evidence
 

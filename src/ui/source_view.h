@@ -35,6 +35,12 @@ enum Miga80SourceViewStatus miga80_source_view_render(
 enum Miga80SourceViewStatus miga80_source_view_render_with_status(
     uint8_t *pixels, size_t stride, const char *source, size_t source_size,
     const char *status_text, struct Miga80SourceViewMetrics *metrics);
+/* Scrolling editable-document view for the current 256x256 LORES UI. */
+enum Miga80SourceViewStatus miga80_source_view_render_editor(
+    uint8_t *pixels, size_t stride, const char *source, size_t source_size,
+    size_t cursor, size_t anchor, size_t first_line, size_t first_column,
+    const char *title_text, const char *status_text,
+    struct Miga80SourceViewMetrics *metrics);
 enum Miga80SourceViewStatus miga80_source_view_draw_status(
     uint8_t *pixels, size_t stride, const char *status_text);
 

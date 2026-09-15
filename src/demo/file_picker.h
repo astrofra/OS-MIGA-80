@@ -31,6 +31,9 @@ void miga80_file_picker_free(struct miga80_file_picker *picker);
 int miga80_file_picker_scan(struct miga80_file_picker *picker, const char *path);
 void miga80_file_picker_render(const struct miga80_file_picker *picker,
                               uint8_t *chunky);
+void miga80_file_picker_render_save_as(
+    const struct miga80_file_picker *picker, const char *filename,
+    uint8_t *chunky);
 enum miga80_picker_action miga80_file_picker_mouse(
     struct miga80_file_picker *picker, int x, int y, ULONG seconds, ULONG micros);
 enum miga80_picker_action miga80_file_picker_key(

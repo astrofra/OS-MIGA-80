@@ -21,8 +21,12 @@ ptplayer replayer. Playback stops on completion or ESC. See the
 
 Click to select; double-click to load. F5 runs the displayed source. ESC stops
 execution or returns to the source. F2 or **OPEN** reopens the selector.
-CTRL-Q exits. The source view remains read-only. See the disk's `README.TXT`
-for navigation, runtime details and current source limits.
+The LORES source view is editable: arrows move, Shift+arrows select,
+Ctrl+C/Ctrl+X/Ctrl+V use the internal clipboard, Ctrl+S saves, and
+Ctrl+Shift+S opens Save As. CTRL-Q exits with unsaved-change protection.
+Documents are limited to 16 KiB and scroll beyond the 64 × 30 viewport. The
+planned HIRES editor is not included yet. See the disk's `README.TXT` for
+navigation, file-safety behavior, runtime details and current source limits.
 
 The stable filename is intentional: Git records successive reference images.
 `miga80.manifest.json` records the image SHA-256 and every packaged payload.

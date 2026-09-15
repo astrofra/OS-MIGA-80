@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as temporary:
         (root / f"extra{i:02}.lua").write_bytes(source)
     for name, data in {
         "Broken.lua": b"bad\x00source\n",
-        "Huge.lua": b"x" * 4100,
+        "Huge.lua": b"x" * 16385,
         "Long.lua": b"x" * 65 + b"\n",
         "Rows.lua": b"x\n" * 31,
         "Gone.lua": source,

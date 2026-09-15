@@ -151,6 +151,47 @@ void miga80_file_picker_render(const struct miga80_file_picker *picker,
     miga80_source_view_draw_row(chunky, 256U, 31U, picker->status, 9U, 14U);
 }
 
+void miga80_file_picker_render_save_as(
+    const struct miga80_file_picker *picker, const char *filename,
+    uint8_t *chunky)
+{
+    int row;
+    char text[65];
+
+    (void)memset(chunky, 0, 256U * 256U);
+    miga80_source_view_draw_row(chunky, 256U, 0U,
+        "MIGA-80 / SAVE AS", 9U, 2U);
+    (void)snprintf(text, sizeof(text), "NAME: %.30s_", filename);
+    miga80_source_view_draw_row(chunky, 256U, 1U, text, 8U, 14U);
+    (void)snprintf(text, sizeof(text), "PATH: %.58s", picker->path);
+    miga80_source_view_draw_row(chunky, 256U, 2U, text, 8U, 0U);
+    miga80_source_view_draw_row(chunky, 256U, 3U,
+        "[ SYS: ][ PARENT ][ REFRESH ]  FOLDERS + *.LUA", 9U, 2U);
+    (void)snprintf(text, sizeof(text),
+        "PAGE %d / %d   TYPE NAME, RETURN SAVE",
+        picker->first / MIGA80_PICKER_PAGE_SIZE + 1,
+        picker->count == 0 ? 1 :
+            (picker->count - 1) / MIGA80_PICKER_PAGE_SIZE + 1);
+    miga80_source_view_draw_row(chunky, 256U, 4U, text, 8U, 0U);
+    for (row = 0; row < MIGA80_PICKER_PAGE_SIZE; ++row) {
+        const int index = picker->first + row;
+        const uint8_t background = index == picker->selected ? 14U : 0U;
+        if (index >= picker->count) { break; }
+        (void)snprintf(text, sizeof(text), "%c %-5s %-44.44s %8ld",
+            index == picker->selected ? '>' : ' ',
+            picker->entries[index].directory ? "[DIR]" : "LUA",
+            picker->entries[index].name, (long)picker->entries[index].bytes);
+        miga80_source_view_draw_row(chunky, 256U, (size_t)(5 + row * 2),
+                                    text, 8U, background);
+        miga80_source_view_draw_row(chunky, 256U, (size_t)(6 + row * 2),
+                                    "", 8U, background);
+    }
+    miga80_source_view_draw_row(chunky, 256U, 29U,
+        "[ PREV PAGE ] [ NEXT PAGE ] [ SAVE ]       [ CANCEL ]", 9U, 2U);
+    miga80_source_view_draw_row(chunky, 256U, 31U,
+                                picker->status, 9U, 14U);
+}
+
 int miga80_file_picker_selected_path(struct miga80_file_picker *picker,
                                    char *path)
 {

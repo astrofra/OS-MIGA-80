@@ -90,6 +90,29 @@ static int verify_rejections(void)
                &metrics) == MIGA80_SOURCE_VIEW_INVALID_CHARACTER;
 }
 
+static int verify_editor_view(void)
+{
+    struct Miga80SourceViewMetrics metrics;
+    char source[256];
+    size_t offset = 0U, line;
+
+    (void)memset(source, 'x', 70U);
+    offset = 70U;
+    source[offset++] = '\t';
+    source[offset++] = '\n';
+    for (line = 0U; line < 31U; ++line) {
+        source[offset++] = 'y';
+        source[offset++] = '\n';
+    }
+    return miga80_source_view_render_editor(framebuffer,
+               MIGA80_SOURCE_VIEW_WIDTH, source, offset, 90U, 92U, 10U, 0U,
+               "EDITABLE", "READY L4:C1", &metrics) ==
+               MIGA80_SOURCE_VIEW_OK &&
+           metrics.source_bytes == offset && metrics.source_lines == 32U &&
+           metrics.maximum_columns == 72U &&
+           framebuffer[8U * MIGA80_SOURCE_VIEW_WIDTH] == 2U;
+}
+
 int main(int argc, char **argv)
 {
     char source[SOURCE_LIMIT + 1U];
@@ -110,6 +133,7 @@ int main(int argc, char **argv)
         metrics.source_lines != MIGA80_SOURCE_VIEW_SOURCE_ROWS ||
         metrics.maximum_columns > MIGA80_SOURCE_VIEW_COLUMNS ||
         !verify_rejections() ||
+        !verify_editor_view() ||
         miga80_source_view_render(framebuffer, MIGA80_SOURCE_VIEW_WIDTH,
                                   source, source_size, &metrics) !=
             MIGA80_SOURCE_VIEW_OK ||

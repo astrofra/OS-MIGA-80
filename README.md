@@ -9,7 +9,12 @@ original “A–MI–GA” jingle synthesized on the 68000 and played through Pa
 ESC skips the intro. See [boot intro and tests](documentation/MIGA-80-boot-intro.md).
 Its graphical selector supports mouse selection, double-click loading, folder
 navigation and pagination. F2 / **OPEN** reopens it, F5 runs the source, ESC
-stops or returns, and CTRL-Q exits. Build with `gmake release`; validate with
+stops or returns, and CTRL-Q exits. The source view is now an editable LORES
+viewport: type to edit; use the arrows (with Shift for selection),
+Ctrl+C/Ctrl+X/Ctrl+V for its internal clipboard, Ctrl+S to save, and
+Ctrl+Shift+S for Save As. Documents are limited to 16 KiB; long lines and files
+scroll rather than being rejected. The planned HIRES editor is not implemented
+yet. Build with `gmake release`; validate with
 `gmake release-fs-uae`. The ADF and payload manifest are kept in `release/`
 for version control. See [distribution instructions](release/README.md).
 The [solid cube demos](documentation/MIGA-80-solid-cube.md) add flat face lighting,

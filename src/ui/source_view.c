@@ -84,6 +84,19 @@ static void draw_text(uint8_t *pixels, size_t stride, size_t column,
     }
 }
 
+static void fill_cell(uint8_t *pixels, size_t stride, size_t column,
+                      size_t row, uint8_t color)
+{
+    size_t y;
+    const size_t origin_x = column * MIGA80_FONT4X8_WIDTH;
+    const size_t origin_y = row * MIGA80_FONT4X8_HEIGHT;
+
+    for (y = 0U; y < MIGA80_FONT4X8_HEIGHT; ++y) {
+        (void)memset(pixels + ((origin_y + y) * stride) + origin_x,
+                     color, MIGA80_FONT4X8_WIDTH);
+    }
+}
+
 void miga80_source_view_draw_row(uint8_t *pixels, size_t stride, size_t row,
     const char *text, uint8_t foreground, uint8_t background)
 {
@@ -233,4 +246,137 @@ enum Miga80SourceViewStatus miga80_source_view_render(
 {
     return miga80_source_view_render_with_status(
         pixels, stride, source, source_size, view_status, metrics);
+}
+
+static enum Miga80SourceViewStatus measure_editor_source(
+    const char *source, size_t source_size,
+    struct Miga80SourceViewMetrics *metrics)
+{
+    size_t index, columns = 0U, maximum_columns = 0U;
+    size_t lines = source_size == 0U ? 0U : 1U;
+
+    for (index = 0U; index < source_size; ++index) {
+        const unsigned char character = (unsigned char)source[index];
+
+        if (character == (unsigned char)'\n') {
+            if (columns > maximum_columns) { maximum_columns = columns; }
+            columns = 0U;
+            if (index + 1U < source_size) { ++lines; }
+        } else if (character == (unsigned char)'\t') {
+            columns += 4U - (columns % 4U);
+        } else if (character >= 0x20U && character <= 0x7eU) {
+            ++columns;
+        } else {
+            return MIGA80_SOURCE_VIEW_INVALID_CHARACTER;
+        }
+    }
+    if (columns > maximum_columns) { maximum_columns = columns; }
+    metrics->source_bytes = source_size;
+    metrics->source_lines = lines;
+    metrics->maximum_columns = maximum_columns;
+    metrics->source_checksum = miga80_source_view_checksum(source, source_size);
+    return MIGA80_SOURCE_VIEW_OK;
+}
+
+enum Miga80SourceViewStatus miga80_source_view_render_editor(
+    uint8_t *pixels, size_t stride, const char *source, size_t source_size,
+    size_t cursor, size_t anchor, size_t first_line, size_t first_column,
+    const char *title_text, const char *status_text,
+    struct Miga80SourceViewMetrics *metrics)
+{
+    enum Miga80SourceViewStatus status;
+    size_t selection_start, selection_end, offset = 0U, line = 0U, row;
+
+    if (pixels == NULL || source == NULL || title_text == NULL ||
+        status_text == NULL || metrics == NULL || cursor > source_size ||
+        (anchor != (size_t)-1 && anchor > source_size)) {
+        return MIGA80_SOURCE_VIEW_INVALID_ARGUMENT;
+    }
+    if (stride < MIGA80_SOURCE_VIEW_WIDTH) {
+        return MIGA80_SOURCE_VIEW_INVALID_STRIDE;
+    }
+    status = measure_editor_source(source, source_size, metrics);
+    if (status != MIGA80_SOURCE_VIEW_OK) { return status; }
+
+    selection_start = anchor == (size_t)-1 || anchor == cursor
+                          ? cursor : anchor < cursor ? anchor : cursor;
+    selection_end = anchor == (size_t)-1 || anchor == cursor
+                        ? cursor : anchor > cursor ? anchor : cursor;
+    fill_rows(pixels, stride, 0U, MIGA80_SOURCE_VIEW_HEIGHT,
+              VIEW_COLOR_BACKGROUND);
+    miga80_source_view_draw_row(pixels, stride, 0U, title_text,
+                                VIEW_COLOR_HEADER_TEXT,
+                                VIEW_COLOR_HEADER_BACKGROUND);
+    miga80_source_view_draw_row(pixels, stride,
+                                MIGA80_SOURCE_VIEW_ROWS - 1U, status_text,
+                                VIEW_COLOR_STATUS_TEXT,
+                                VIEW_COLOR_STATUS_BACKGROUND);
+
+    while (line < first_line && offset < source_size) {
+        if (source[offset++] == '\n') { ++line; }
+    }
+    for (row = 1U; row <= MIGA80_SOURCE_VIEW_SOURCE_ROWS; ++row) {
+        size_t column = 0U;
+        int ended = 0;
+
+        if (line < first_line) { break; }
+        while (!ended) {
+            const int at_end = offset == source_size;
+            const int at_newline = !at_end && source[offset] == '\n';
+            const int selected = offset >= selection_start &&
+                                 offset < selection_end;
+            size_t width = 1U, cell;
+
+            if (at_end || at_newline) {
+                if (column >= first_column &&
+                    column < first_column + MIGA80_SOURCE_VIEW_COLUMNS &&
+                    (cursor == offset || selected)) {
+                    const size_t visible = column - first_column;
+                    fill_cell(pixels, stride, visible, row,
+                              cursor == offset ? VIEW_COLOR_HEADER_BACKGROUND
+                                               : VIEW_COLOR_STATUS_BACKGROUND);
+                }
+                if (at_end) { ended = 1; }
+                else { ++offset; ++line; }
+                break;
+            }
+            if (source[offset] == '\t') {
+                width = 4U - (column % 4U);
+            }
+            for (cell = 0U; cell < width; ++cell) {
+                const size_t logical_column = column + cell;
+                if (logical_column >= first_column &&
+                    logical_column < first_column +
+                                         MIGA80_SOURCE_VIEW_COLUMNS) {
+                    const size_t visible = logical_column - first_column;
+                    const int cursor_cell = cursor == offset && cell == 0U;
+                    if (selected || cursor_cell) {
+                        fill_cell(pixels, stride, visible, row,
+                                  cursor_cell
+                                      ? VIEW_COLOR_HEADER_BACKGROUND
+                                      : VIEW_COLOR_STATUS_BACKGROUND);
+                    }
+                    if (cell == 0U && source[offset] != '\t') {
+                        draw_character(pixels, stride, visible, row,
+                            (unsigned char)source[offset],
+                            selected || cursor_cell
+                                ? VIEW_COLOR_HEADER_TEXT
+                                : VIEW_COLOR_SOURCE_TEXT);
+                    }
+                }
+            }
+            column += width;
+            ++offset;
+            if (column >= first_column + MIGA80_SOURCE_VIEW_COLUMNS &&
+                cursor < offset && selection_end <= offset) {
+                while (offset < source_size && source[offset] != '\n') {
+                    ++offset;
+                }
+            }
+        }
+        if (offset == source_size && ended) { break; }
+    }
+    metrics->framebuffer_checksum = miga80_source_view_checksum(
+        pixels, stride * MIGA80_SOURCE_VIEW_HEIGHT);
+    return MIGA80_SOURCE_VIEW_OK;
 }

@@ -42,6 +42,7 @@
 #include "demo/music_host.h"
 #include "demo/drawing_host.h"
 #include "drawing_test_data.h"
+#include "ui/editor.h"
 #include "ui/palette.h"
 #include "ui/source_view.h"
 
@@ -51,7 +52,7 @@
 #define DEMO_DISPLAY_ID (PAL_MONITOR_ID | LORESDPF_KEY)
 #define DEMO_PALETTE_COLORS 32U
 #define DEMO_CHUNKY_BYTES (DEMO_SCREEN_WIDTH * DEMO_SCREEN_HEIGHT)
-#define DEMO_SOURCE_CAPACITY 4096U
+#define DEMO_SOURCE_CAPACITY 16384U
 #define DEMO_CODE_CAPACITY 4096U
 #define DEMO_COMPILER_STACK_BYTES 32768U
 #define DEMO_RUNTIME_STACK_BYTES 4096U
@@ -77,6 +78,10 @@ struct Library *KeymapBase = NULL;
 
 static char source_buffer[DEMO_SOURCE_CAPACITY + 1U];
 static char pending_source[DEMO_SOURCE_CAPACITY + 1U];
+static char editor_clipboard[DEMO_SOURCE_CAPACITY + 1U];
+static struct Miga80EditorDocument editor_document;
+static struct Miga80EditorDocument *interactive_document;
+static struct Miga80SourceViewMetrics *interactive_metrics;
 static const char *interactive_source_path;
 static ULONG amiga_palette[1U + (DEMO_PALETTE_COLORS * 3U) + 1U];
 static ULONG palette_readback[DEMO_PALETTE_COLORS * 3U];
@@ -235,10 +240,19 @@ static void release_compiler_stack(void)
 
 static int write_bytes(BPTR output, const char *bytes, size_t size)
 {
+    size_t written = 0U;
+
     if (output == (BPTR)0 || size > 0x7fffffffUL) {
         return 0;
     }
-    return Write(output, (APTR)bytes, (LONG)size) == (LONG)size;
+    while (written < size) {
+        const LONG count = Write(output, (APTR)(bytes + written),
+                                 (LONG)(size - written));
+
+        if (count <= 0) { return 0; }
+        written += (size_t)count;
+    }
+    return 1;
 }
 
 static int write_text(BPTR output, const char *text)
@@ -469,23 +483,171 @@ static int write_stopped_report(const char *path)
 static int read_source(const char *path, char *buffer, size_t *source_size)
 {
     BPTR input = Open((STRPTR)path, MODE_OLDFILE);
-    LONG count;
+    size_t total = 0U, normalized_size = 0U;
+    int success = 0;
 
     if (input == (BPTR)0) {
         return 0;
     }
-    count = Read(input, buffer, (LONG)sizeof(source_buffer));
-    if (!Close(input) || count < 0 || (size_t)count > DEMO_SOURCE_CAPACITY) {
-        return 0;
+    while (total <= DEMO_SOURCE_CAPACITY) {
+        const LONG count = Read(input, buffer + total,
+            (LONG)(DEMO_SOURCE_CAPACITY + 1U - total));
+
+        if (count < 0) { goto done; }
+        if (count == 0) { break; }
+        total += (size_t)count;
+        if (total > DEMO_SOURCE_CAPACITY) { goto done; }
     }
-    buffer[count] = '\0';
-    *source_size = (size_t)count;
-    return 1;
+    if (miga80_editor_normalize_text(buffer, DEMO_SOURCE_CAPACITY,
+            buffer, total, &normalized_size) != MIGA80_EDITOR_OK) {
+        goto done;
+    }
+    *source_size = normalized_size;
+    success = 1;
+done:
+    if (!Close(input)) { success = 0; }
+    return success;
 }
 
 static int load_source(const char *path, size_t *source_size)
 {
     return read_source(path, source_buffer, source_size);
+}
+
+/* -1 is absent, 0 a file, 1 a directory, and 2 an unreadable/unknown entry. */
+static int path_kind(const char *path)
+{
+    BPTR lock = Lock((STRPTR)path, ACCESS_READ);
+    struct FileInfoBlock *info;
+    int kind = 2;
+
+    if (lock == (BPTR)0) { return -1; }
+    info = AllocDosObject(DOS_FIB, NULL);
+    if (info != NULL) {
+        if (Examine(lock, info)) {
+            kind = info->fib_DirEntryType > 0 ? 1 : 0;
+        }
+        FreeDosObject(DOS_FIB, info);
+    }
+    UnLock(lock);
+    return kind;
+}
+
+static int path_exists(const char *path)
+{
+    return path_kind(path) != -1;
+}
+
+static int destination_directory(const char *path, char *directory)
+{
+    char *part;
+
+    if (strlen(path) >= MIGA80_PICKER_PATH_SIZE) { return 0; }
+    (void)strcpy(directory, path);
+    part = (char *)FilePart((STRPTR)directory);
+    if (part == NULL) { return 0; }
+    *part = '\0';
+    return 1;
+}
+
+static int unused_recovery_path(const char *directory, const char *kind,
+                                char *path)
+{
+    unsigned int candidate;
+
+    for (candidate = 0U; candidate < 100U; ++candidate) {
+        char name[20];
+
+        (void)snprintf(name, sizeof(name), "m80%s%02u.tmp", kind, candidate);
+        (void)strcpy(path, directory);
+        if (!AddPart(path, name, MIGA80_PICKER_PATH_SIZE)) { return 0; }
+        if (!path_exists(path)) { return 1; }
+    }
+    return 0;
+}
+
+static int save_source_file(const char *path, const char *source,
+                            size_t source_size, char *status,
+                            size_t status_capacity)
+{
+    char directory[MIGA80_PICKER_PATH_SIZE];
+    char temporary[MIGA80_PICKER_PATH_SIZE];
+    char backup[MIGA80_PICKER_PATH_SIZE];
+    BPTR output = (BPTR)0;
+    const int destination_kind = path_kind(path);
+    const int replacing = destination_kind == 0;
+    int backup_moved = 0, published = 0, write_ok, close_ok;
+
+    if (destination_kind > 0) {
+        (void)snprintf(status, status_capacity,
+                       "SAVE FAILED - DESTINATION IS NOT A FILE");
+        return 0;
+    }
+    if (!destination_directory(path, directory) ||
+        !unused_recovery_path(directory, "tmp", temporary) ||
+        (replacing && !unused_recovery_path(directory, "bak", backup))) {
+        (void)snprintf(status, status_capacity,
+                       "SAVE FAILED - NO SAFE RECOVERY NAME");
+        return 0;
+    }
+    output = Open((STRPTR)temporary, MODE_NEWFILE);
+    if (output == (BPTR)0) {
+        (void)snprintf(status, status_capacity,
+                       "SAVE FAILED - CANNOT CREATE TEMPORARY");
+        return 0;
+    }
+    write_ok = write_bytes(output, source, source_size);
+    close_ok = Close(output) != 0;
+    output = (BPTR)0;
+    if (!write_ok || !close_ok) {
+        if (!DeleteFile((STRPTR)temporary) && path_exists(temporary)) {
+            (void)snprintf(status, status_capacity,
+                           "SAVE FAILED - RECOVERY %.33s", temporary);
+        } else {
+            (void)snprintf(status, status_capacity,
+                           "SAVE FAILED - WRITE OR CLOSE ERROR");
+        }
+        return 0;
+    }
+    if (replacing) {
+        if (!Rename((STRPTR)path, (STRPTR)backup)) {
+            if (!DeleteFile((STRPTR)temporary) && path_exists(temporary)) {
+                (void)snprintf(status, status_capacity,
+                    "SAVE FAILED - RECOVER %.34s", temporary);
+            } else {
+                (void)snprintf(status, status_capacity,
+                    "SAVE FAILED - CANNOT BACK UP DESTINATION");
+            }
+            return 0;
+        }
+        backup_moved = 1;
+    }
+    if (Rename((STRPTR)temporary, (STRPTR)path)) {
+        published = 1;
+    } else if (backup_moved && !Rename((STRPTR)backup, (STRPTR)path)) {
+        (void)snprintf(status, status_capacity,
+                       "SAVE FAILED - RECOVER %.34s", backup);
+        return 0;
+    }
+    if (!published) {
+        if (backup_moved) {
+            (void)snprintf(status, status_capacity,
+                "SAVE FAILED - ORIGINAL RESTORED; TEMP %.18s",
+                FilePart((STRPTR)temporary));
+        } else {
+            (void)snprintf(status, status_capacity,
+                "SAVE FAILED - RECOVER %.34s", temporary);
+        }
+        return 0;
+    }
+    if (backup_moved && !DeleteFile((STRPTR)backup)) {
+        (void)snprintf(status, status_capacity,
+                       "SAVED - OLD BACKUP %.38s", backup);
+        return 1;
+    }
+    (void)snprintf(status, status_capacity, "SAVED %.54s",
+                   FilePart((STRPTR)path));
+    return 1;
 }
 
 static ULONG expand_nibble(ULONG value)
@@ -742,8 +904,15 @@ static int verify_source_view(struct Screen *screen, const uint8_t *chunky)
 static void draw_interactive_title(uint8_t *chunky)
 {
     char title[65];
-    (void)snprintf(title, sizeof(title), "%-54.54s [OPEN F2]",
-                   FilePart((STRPTR)interactive_source_path));
+    const char *filename = interactive_source_path != NULL &&
+                           interactive_source_path[0] != '\0'
+                               ? (const char *)FilePart(
+                                     (STRPTR)interactive_source_path)
+                               : "(untitled)";
+    (void)snprintf(title, sizeof(title), "%-46.46s%c F2 OPEN  F5 RUN",
+                   filename,
+                   interactive_document != NULL && interactive_document->dirty
+                       ? '*' : ' ');
     miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 0U, title, 9U, 2U);
 }
 
@@ -752,6 +921,28 @@ static int show_source_status(struct Screen *screen, uint8_t *chunky,
 {
     struct Miga80SourceViewMetrics scratch;
 
+    if (interactive_document != NULL) {
+        char footer[65];
+        size_t line, column;
+
+        miga80_editor_ensure_cursor_visible(interactive_document,
+            MIGA80_SOURCE_VIEW_SOURCE_ROWS, MIGA80_SOURCE_VIEW_COLUMNS);
+        miga80_editor_cursor_position(interactive_document, &line, &column);
+        (void)snprintf(footer, sizeof(footer), "%-43.43s L%lu:C%lu",
+                       status, (unsigned long)(line + 1U),
+                       (unsigned long)(column + 1U));
+        if (miga80_source_view_render_editor(chunky, DEMO_SCREEN_WIDTH,
+                interactive_document->text, interactive_document->length,
+                interactive_document->cursor, interactive_document->anchor,
+                interactive_document->first_visible_line,
+                interactive_document->first_visible_column, "", footer,
+                &scratch) != MIGA80_SOURCE_VIEW_OK) {
+            return 0;
+        }
+        draw_interactive_title(chunky);
+        if (interactive_metrics != NULL) { *interactive_metrics = scratch; }
+        return publish_ui(screen, chunky);
+    }
     if (miga80_source_view_render_with_status(
             chunky, DEMO_SCREEN_WIDTH, source_buffer, text_length(source_buffer),
             status, &scratch) != MIGA80_SOURCE_VIEW_OK) { return 0; }
@@ -1188,6 +1379,43 @@ static int compile_and_run(struct Screen *screen, uint8_t *chunky,
 
 enum demo_state { DEMO_STATE_SOURCE, DEMO_STATE_RESULT, DEMO_STATE_ERROR };
 
+static unsigned int editor_key_qualifiers(UWORD qualifiers)
+{
+    unsigned int result = 0U;
+
+    if ((qualifiers & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) != 0U) {
+        result |= MIGA80_EDITOR_KEY_SHIFT;
+    }
+    if ((qualifiers & IEQUALIFIER_CONTROL) != 0U) {
+        result |= MIGA80_EDITOR_KEY_CONTROL;
+    }
+    if ((qualifiers & IEQUALIFIER_REPEAT) != 0U) {
+        result |= MIGA80_EDITOR_KEY_REPEAT;
+    }
+    if ((qualifiers & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) != 0U) {
+        result |= MIGA80_EDITOR_KEY_ALT;
+    }
+    if ((qualifiers & (IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND)) != 0U) {
+        result |= MIGA80_EDITOR_KEY_COMMAND;
+    }
+    return result;
+}
+
+static size_t translate_raw_key(UWORD code, UWORD qualifiers,
+                                APTR event_address, char *translated,
+                                size_t capacity)
+{
+    struct InputEvent event = {0};
+    LONG count;
+
+    event.ie_Class = IECLASS_RAWKEY;
+    event.ie_Code = code;
+    event.ie_Qualifier = qualifiers;
+    event.ie_EventAddress = event_address;
+    count = MapRawKey(&event, translated, (LONG)capacity, NULL);
+    return count > 0 ? (size_t)count : 0U;
+}
+
 static int is_quit_key(UWORD code, UWORD qualifiers)
 {
     struct InputEvent event = {0};
@@ -1222,9 +1450,11 @@ static int poll_intro_input(void *data)
     while ((message = (struct IntuiMessage *)GetMsg(window->UserPort)) != NULL) {
         const ULONG kind = message->Class;
         const UWORD code = message->Code, qualifiers = message->Qualifier;
+        const int quit = kind == IDCMP_RAWKEY &&
+                         is_quit_key(code, qualifiers);
         ReplyMsg((struct Message *)message);
         if (kind == IDCMP_RAWKEY) {
-            if (is_quit_key(code, qualifiers)) { return MIGA80_INTRO_QUIT; }
+            if (quit) { return MIGA80_INTRO_QUIT; }
             if (code == (DEMO_RAWKEY_ESCAPE | 0x80U)) { escape_held = 0; }
             if (code == DEMO_RAWKEY_ESCAPE && (qualifiers & IEQUALIFIER_REPEAT) == 0U) {
                 escape_held = 1;
@@ -1288,20 +1518,46 @@ static int workflow_key(struct Screen *screen, uint8_t *chunky,
     return 0;
 }
 
+enum demo_ui_mode {
+    DEMO_UI_SOURCE = 0,
+    DEMO_UI_OPEN,
+    DEMO_UI_SAVE_AS,
+    DEMO_UI_UNSAVED,
+    DEMO_UI_OVERWRITE
+};
+
+enum demo_pending_action {
+    DEMO_PENDING_NONE = 0,
+    DEMO_PENDING_OPEN,
+    DEMO_PENDING_QUIT
+};
+
 struct demo_ui {
     struct miga80_file_picker picker;
     struct Miga80SourceViewMetrics metrics;
     enum demo_state state;
+    enum demo_ui_mode mode;
+    enum demo_pending_action pending;
     int browsing;
     char source_path[MIGA80_PICKER_PATH_SIZE];
+    char save_path[MIGA80_PICKER_PATH_SIZE];
+    char save_name[31];
+    char status[65];
 };
+
+static int ui_source_status(struct demo_ui *ui, struct Screen *screen,
+                            uint8_t *chunky, const char *status)
+{
+    ui->browsing = 0;
+    ui->mode = DEMO_UI_SOURCE;
+    ui->state = DEMO_STATE_SOURCE;
+    return show_source_status(screen, chunky, status);
+}
 
 static int ui_source(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
 {
-    ui->browsing = 0;
-    ui->state = DEMO_STATE_SOURCE;
-    return show_source_status(screen, chunky,
-                              "SOURCE READY - F2 OPEN - F5 RUN - CTRL-Q EXIT");
+    return ui_source_status(ui, screen, chunky,
+        "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN");
 }
 
 static int ui_picker(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
@@ -1310,66 +1566,462 @@ static int ui_picker(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
     return publish_ui(screen, chunky);
 }
 
+static int ui_save_as_view(struct demo_ui *ui, struct Screen *screen,
+                           uint8_t *chunky)
+{
+    miga80_file_picker_render_save_as(&ui->picker, ui->save_name, chunky);
+    return publish_ui(screen, chunky);
+}
+
+static int ui_prompt_view(struct demo_ui *ui, struct Screen *screen,
+                          uint8_t *chunky, int overwrite)
+{
+    size_t pixel;
+    const char *line1 = overwrite
+        ? "FILE EXISTS - REPLACE IT?"
+        : "THE DOCUMENT HAS UNSAVED CHANGES";
+    const char *line2 = overwrite
+        ? "Y REPLACE    N/ESC BACK"
+        : "S SAVE    D DISCARD    ESC CANCEL";
+
+    if (!show_source_status(screen, chunky,
+            overwrite ? "CONFIRM REPLACEMENT" : "UNSAVED DOCUMENT")) {
+        return 0;
+    }
+    for (pixel = 0U; pixel < DEMO_CHUNKY_BYTES; ++pixel) {
+        chunky[pixel] >>= 4;
+    }
+    miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 13U, "", 9U, 2U);
+    miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 14U, line1, 9U, 2U);
+    miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 15U, line2, 9U, 2U);
+    miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 16U, "", 9U, 2U);
+    ui->browsing = 0;
+    ui->mode = overwrite ? DEMO_UI_OVERWRITE : DEMO_UI_UNSAVED;
+    return publish_ui(screen, chunky);
+}
+
+static int ui_begin_open(struct demo_ui *ui, struct Screen *screen,
+                         uint8_t *chunky)
+{
+    ui->pending = DEMO_PENDING_NONE;
+    ui->browsing = 1;
+    ui->mode = DEMO_UI_OPEN;
+    (void)miga80_file_picker_scan(&ui->picker, ui->picker.path);
+    return ui_picker(ui, screen, chunky) ? 0 : -1;
+}
+
+static int ui_finish_pending(struct demo_ui *ui, struct Screen *screen,
+                             uint8_t *chunky, const char *status)
+{
+    const enum demo_pending_action pending = ui->pending;
+
+    ui->pending = DEMO_PENDING_NONE;
+    if (pending == DEMO_PENDING_QUIT) { return 1; }
+    if (pending == DEMO_PENDING_OPEN) {
+        return ui_begin_open(ui, screen, chunky);
+    }
+    return ui_source_status(ui, screen, chunky, status) ? 0 : -1;
+}
+
+static int ui_begin_save_as(struct demo_ui *ui, struct Screen *screen,
+                            uint8_t *chunky)
+{
+    char directory[MIGA80_PICKER_PATH_SIZE];
+
+    ui->browsing = 1;
+    ui->mode = DEMO_UI_SAVE_AS;
+    ui->save_name[0] = '\0';
+    if (ui->source_path[0] != '\0') {
+        (void)snprintf(ui->save_name, sizeof(ui->save_name), "%.30s",
+                       FilePart((STRPTR)ui->source_path));
+        if (destination_directory(ui->source_path, directory) &&
+            directory[0] != '\0') {
+            (void)miga80_file_picker_scan(&ui->picker, directory);
+        }
+    }
+    (void)strcpy(ui->picker.status,
+                 "TYPE A NAME (30 CHARS MAX) - RETURN SAVE - ESC CANCEL");
+    return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+}
+
+static int ui_request_destructive(struct demo_ui *ui, struct Screen *screen,
+                                  uint8_t *chunky,
+                                  enum demo_pending_action pending)
+{
+    if (editor_document.dirty) {
+        ui->pending = pending;
+        return ui_prompt_view(ui, screen, chunky, 0) ? 0 : -1;
+    }
+    if (pending == DEMO_PENDING_QUIT) { return 1; }
+    return ui_begin_open(ui, screen, chunky);
+}
+
+static int ui_saved(struct demo_ui *ui, struct Screen *screen,
+                    uint8_t *chunky, const char *path)
+{
+    if (path != ui->source_path) {
+        (void)strcpy(ui->source_path, path);
+    }
+    editor_document.dirty = 0;
+    return ui_finish_pending(ui, screen, chunky, ui->status);
+}
+
+static int ui_save_current(struct demo_ui *ui, struct Screen *screen,
+                           uint8_t *chunky)
+{
+    if (ui->source_path[0] == '\0') {
+        return ui_begin_save_as(ui, screen, chunky);
+    }
+    if (!save_source_file(ui->source_path, editor_document.text,
+                          editor_document.length, ui->status,
+                          sizeof(ui->status))) {
+        ui->pending = DEMO_PENDING_NONE;
+        return ui_source_status(ui, screen, chunky, ui->status) ? 0 : -1;
+    }
+    return ui_saved(ui, screen, chunky, ui->source_path);
+}
+
+static int valid_save_name(const char *name)
+{
+    size_t index, length = strlen(name);
+
+    if (length == 0U || length > 30U || strcmp(name, ".") == 0 ||
+        strcmp(name, "..") == 0) {
+        return 0;
+    }
+    for (index = 0U; index < length; ++index) {
+        if ((unsigned char)name[index] < 0x20U || name[index] == ':' ||
+            name[index] == '/') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int ui_attempt_save_as(struct demo_ui *ui, struct Screen *screen,
+                              uint8_t *chunky, int confirmed)
+{
+    if (!valid_save_name(ui->save_name)) {
+        (void)strcpy(ui->picker.status,
+                     "INVALID NAME - USE 1..30 CHARS, NO COLON OR SLASH");
+        return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+    }
+    (void)strcpy(ui->save_path, ui->picker.path);
+    if (!AddPart(ui->save_path, ui->save_name, sizeof(ui->save_path))) {
+        (void)strcpy(ui->picker.status, "PATH TOO LONG");
+        return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+    }
+    if (!confirmed && path_exists(ui->save_path)) {
+        return ui_prompt_view(ui, screen, chunky, 1) ? 0 : -1;
+    }
+    if (!save_source_file(ui->save_path, editor_document.text,
+                          editor_document.length, ui->status,
+                          sizeof(ui->status))) {
+        ui->pending = DEMO_PENDING_NONE;
+        (void)snprintf(ui->picker.status, sizeof(ui->picker.status), "%s",
+                       ui->status);
+        ui->browsing = 1;
+        ui->mode = DEMO_UI_SAVE_AS;
+        return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+    }
+    return ui_saved(ui, screen, chunky, ui->save_path);
+}
+
 static int ui_load(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
 {
     char path[MIGA80_PICKER_PATH_SIZE];
     size_t size;
-    struct Miga80SourceViewMetrics metrics;
-    enum Miga80SourceViewStatus status;
+
     if (!miga80_file_picker_selected_path(&ui->picker, path) ||
         !read_source(path, pending_source, &size)) {
-        (void)strcpy(ui->picker.status, "CANNOT LOAD FILE (READ ERROR OR MORE THAN 4096 BYTES)");
+        (void)strcpy(ui->picker.status,
+            "CANNOT LOAD - I/O, ENCODING, OR 16 KIB LIMIT");
         return ui_picker(ui, screen, chunky);
     }
-    status = miga80_source_view_render(chunky, DEMO_SCREEN_WIDTH,
-                                      pending_source, size, &metrics);
-    if (status != MIGA80_SOURCE_VIEW_OK) {
-        const char *reason = status == MIGA80_SOURCE_VIEW_TOO_MANY_LINES
-            ? "SOURCE EXCEEDS 30 LINES" : status == MIGA80_SOURCE_VIEW_LINE_TOO_LONG
-            ? "SOURCE EXCEEDS 64 COLUMNS" : "SOURCE MUST BE PRINTABLE ASCII WITH LF NEWLINES";
-        (void)snprintf(ui->picker.status, sizeof(ui->picker.status), "%s", reason);
+    if (miga80_editor_set_text(&editor_document, pending_source, size) !=
+            MIGA80_EDITOR_OK) {
+        (void)strcpy(ui->picker.status, "CANNOT LOAD - INVALID SOURCE");
         return ui_picker(ui, screen, chunky);
     }
-    /* No source or compiler metrics change until the complete file validates. */
-    (void)memcpy(source_buffer, pending_source, size + 1U);
-    ui->metrics = metrics;
     (void)strcpy(ui->source_path, path);
-    return ui_source(ui, screen, chunky);
+    ui->pending = DEMO_PENDING_NONE;
+    return ui_source_status(ui, screen, chunky, "LOADED - EDIT OR F5 RUN");
+}
+
+static int ui_cancel_save_as(struct demo_ui *ui, struct Screen *screen,
+                             uint8_t *chunky)
+{
+    ui->pending = DEMO_PENDING_NONE;
+    return ui_source(ui, screen, chunky) ? 0 : -1;
+}
+
+static int ui_save_as_event(struct demo_ui *ui, struct Screen *screen,
+                            uint8_t *chunky, ULONG message_class, UWORD code,
+                            UWORD qualifiers, WORD x, WORD y, ULONG seconds,
+                            ULONG micros, const char *translated,
+                            size_t translated_length)
+{
+    enum Miga80EditorCommand command = MIGA80_EDITOR_COMMAND_NONE;
+    enum miga80_picker_action action = MIGA80_PICKER_NONE;
+
+    if (message_class == IDCMP_RAWKEY) {
+        command = miga80_editor_decode_key(code,
+            editor_key_qualifiers(qualifiers), translated,
+            translated_length);
+        if (command == MIGA80_EDITOR_COMMAND_ESCAPE) {
+            return ui_cancel_save_as(ui, screen, chunky);
+        }
+        if (command == MIGA80_EDITOR_COMMAND_QUIT) {
+            return ui_request_destructive(ui, screen, chunky,
+                                          DEMO_PENDING_QUIT);
+        }
+        if (command == MIGA80_EDITOR_COMMAND_BACKSPACE ||
+            command == MIGA80_EDITOR_COMMAND_DELETE) {
+            const size_t length = strlen(ui->save_name);
+            if (length != 0U) { ui->save_name[length - 1U] = '\0'; }
+            return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+        }
+        if (command == MIGA80_EDITOR_COMMAND_TEXT) {
+            size_t name_length = strlen(ui->save_name), index;
+            for (index = 0U; index < translated_length; ++index) {
+                const char character = translated[index];
+                if (name_length >= 30U || character == ':' ||
+                    character == '/' || (unsigned char)character < 0x20U) {
+                    (void)strcpy(ui->picker.status,
+                        "NAME LIMIT 30 CHARS; COLON AND SLASH ARE INVALID");
+                    return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+                }
+                ui->save_name[name_length++] = character;
+            }
+            ui->save_name[name_length] = '\0';
+            return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+        }
+        if (command == MIGA80_EDITOR_COMMAND_ENTER) {
+            if (ui->picker.selected >= 0 &&
+                ui->picker.entries[ui->picker.selected].directory) {
+                action = miga80_file_picker_key(&ui->picker, code);
+            } else {
+                return ui_attempt_save_as(ui, screen, chunky, 0);
+            }
+        } else if (command == MIGA80_EDITOR_COMMAND_UP ||
+                   command == MIGA80_EDITOR_COMMAND_DOWN) {
+            action = miga80_file_picker_key(&ui->picker, code);
+        }
+    } else if (message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) {
+        if (y >= 232 && y < 240 && x >= 124 && x < 180) {
+            return ui_attempt_save_as(ui, screen, chunky, 0);
+        }
+        action = miga80_file_picker_mouse(&ui->picker, x, y, seconds, micros);
+        if (action == MIGA80_PICKER_REDRAW && y >= 40 && y < 232 &&
+            ui->picker.selected >= 0 &&
+            !ui->picker.entries[ui->picker.selected].directory) {
+            (void)snprintf(ui->save_name, sizeof(ui->save_name), "%.30s",
+                           ui->picker.entries[ui->picker.selected].name);
+        }
+    }
+    if (action == MIGA80_PICKER_LOAD) {
+        if (ui->picker.selected >= 0 &&
+            !ui->picker.entries[ui->picker.selected].directory) {
+            (void)snprintf(ui->save_name, sizeof(ui->save_name), "%.30s",
+                           ui->picker.entries[ui->picker.selected].name);
+        }
+        return ui_attempt_save_as(ui, screen, chunky, 0);
+    }
+    if (action == MIGA80_PICKER_CANCEL) {
+        return ui_cancel_save_as(ui, screen, chunky);
+    }
+    if (action == MIGA80_PICKER_REDRAW) {
+        if (message_class == IDCMP_RAWKEY &&
+            (command == MIGA80_EDITOR_COMMAND_UP ||
+             command == MIGA80_EDITOR_COMMAND_DOWN) &&
+            ui->picker.selected >= 0 &&
+            !ui->picker.entries[ui->picker.selected].directory) {
+            (void)snprintf(ui->save_name, sizeof(ui->save_name), "%.30s",
+                           ui->picker.entries[ui->picker.selected].name);
+        }
+        return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+    }
+    return 0;
+}
+
+static int ui_prompt_event(struct demo_ui *ui, struct Screen *screen,
+                           uint8_t *chunky, enum Miga80EditorCommand command,
+                           const char *translated, size_t translated_length)
+{
+    char choice = translated_length == 1U && translated != NULL
+                      ? translated[0] : '\0';
+
+    if (choice >= 'A' && choice <= 'Z') { choice += (char)('a' - 'A'); }
+    if (ui->mode == DEMO_UI_OVERWRITE) {
+        if (choice == 'y') { return ui_attempt_save_as(ui, screen, chunky, 1); }
+        if (choice == 'n' || command == MIGA80_EDITOR_COMMAND_ESCAPE) {
+            ui->browsing = 1;
+            ui->mode = DEMO_UI_SAVE_AS;
+            return ui_save_as_view(ui, screen, chunky) ? 0 : -1;
+        }
+        return 0;
+    }
+    if (command == MIGA80_EDITOR_COMMAND_SAVE || choice == 's') {
+        return ui_save_current(ui, screen, chunky);
+    }
+    if (choice == 'd') {
+        return ui_finish_pending(ui, screen, chunky,
+                                 "UNSAVED CHANGES DISCARDED");
+    }
+    if (choice == 'c' || command == MIGA80_EDITOR_COMMAND_ESCAPE) {
+        ui->pending = DEMO_PENDING_NONE;
+        return ui_source(ui, screen, chunky) ? 0 : -1;
+    }
+    return 0;
+}
+
+static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
+                           uint8_t *chunky, const char *report_path,
+                           UWORD code, UWORD qualifiers,
+                           const char *translated, size_t translated_length)
+{
+    const unsigned int key_qualifiers = editor_key_qualifiers(qualifiers);
+    const int selecting = (key_qualifiers & MIGA80_EDITOR_KEY_SHIFT) != 0U;
+    const enum Miga80EditorCommand command = miga80_editor_decode_key(
+        code, key_qualifiers, translated, translated_length);
+    enum Miga80EditorStatus edit_status = MIGA80_EDITOR_OK;
+    const char *status = "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN";
+
+    if (command == MIGA80_EDITOR_COMMAND_QUIT) {
+        return ui_request_destructive(ui, screen, chunky, DEMO_PENDING_QUIT);
+    }
+    if (command == MIGA80_EDITOR_COMMAND_ESCAPE) {
+        return workflow_key(screen, chunky, &ui->metrics, report_path,
+                            &ui->state, code, qualifiers);
+    }
+    if (ui->state == DEMO_STATE_RESULT) { return 0; }
+    if (command == MIGA80_EDITOR_COMMAND_OPEN) {
+        return ui_request_destructive(ui, screen, chunky, DEMO_PENDING_OPEN);
+    }
+    if (command == MIGA80_EDITOR_COMMAND_SAVE) {
+        return ui_save_current(ui, screen, chunky);
+    }
+    if (command == MIGA80_EDITOR_COMMAND_SAVE_AS) {
+        ui->pending = DEMO_PENDING_NONE;
+        return ui_begin_save_as(ui, screen, chunky);
+    }
+    if (command == MIGA80_EDITOR_COMMAND_RUN) {
+        if (ui->state == DEMO_STATE_ERROR) { ui->state = DEMO_STATE_SOURCE; }
+        return workflow_key(screen, chunky, &ui->metrics, report_path,
+                            &ui->state, code, qualifiers);
+    }
+    if (command == MIGA80_EDITOR_COMMAND_NONE) {
+        return 0;
+    }
+    if (command == MIGA80_EDITOR_COMMAND_TEXT) {
+        edit_status = miga80_editor_insert(&editor_document, translated,
+                                           translated_length);
+    } else if (command == MIGA80_EDITOR_COMMAND_ENTER) {
+        edit_status = miga80_editor_insert(&editor_document, "\n", 1U);
+    } else if (command == MIGA80_EDITOR_COMMAND_TAB) {
+        char spaces[4] = {' ', ' ', ' ', ' '};
+        size_t line, column;
+        miga80_editor_cursor_position(&editor_document, &line, &column);
+        edit_status = miga80_editor_insert(&editor_document, spaces,
+                                           4U - (column % 4U));
+    } else if (command == MIGA80_EDITOR_COMMAND_BACKSPACE) {
+        miga80_editor_backspace(&editor_document);
+    } else if (command == MIGA80_EDITOR_COMMAND_DELETE) {
+        miga80_editor_delete(&editor_document);
+    } else if (command == MIGA80_EDITOR_COMMAND_LEFT ||
+               command == MIGA80_EDITOR_COMMAND_RIGHT ||
+               command == MIGA80_EDITOR_COMMAND_UP ||
+               command == MIGA80_EDITOR_COMMAND_DOWN) {
+        const enum Miga80EditorDirection direction =
+            command == MIGA80_EDITOR_COMMAND_LEFT ? MIGA80_EDITOR_LEFT :
+            command == MIGA80_EDITOR_COMMAND_RIGHT ? MIGA80_EDITOR_RIGHT :
+            command == MIGA80_EDITOR_COMMAND_UP ? MIGA80_EDITOR_UP :
+                                                  MIGA80_EDITOR_DOWN;
+        miga80_editor_move(&editor_document, direction, selecting);
+    } else if (command == MIGA80_EDITOR_COMMAND_COPY) {
+        edit_status = miga80_editor_copy(&editor_document);
+        status = "COPIED TO INTERNAL CLIPBOARD";
+    } else if (command == MIGA80_EDITOR_COMMAND_CUT) {
+        edit_status = miga80_editor_cut(&editor_document);
+        status = "CUT TO INTERNAL CLIPBOARD";
+    } else if (command == MIGA80_EDITOR_COMMAND_PASTE) {
+        edit_status = miga80_editor_paste(&editor_document);
+        status = "PASTED FROM INTERNAL CLIPBOARD";
+    }
+    if (edit_status != MIGA80_EDITOR_OK) {
+        status = edit_status == MIGA80_EDITOR_CAPACITY
+            ? "EDIT REJECTED - 16 KIB DOCUMENT LIMIT"
+            : "EDIT REJECTED - CLIPBOARD OR CHARACTER";
+    }
+    ui->state = DEMO_STATE_SOURCE;
+    return show_source_status(screen, chunky, status) ? 0 : -1;
 }
 
 /* Real IDCMP and the on-target selector regression share this dispatch. */
 static int ui_event(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky,
     const char *report_path, ULONG message_class, UWORD code, UWORD qualifiers,
-    WORD x, WORD y, ULONG seconds, ULONG micros)
+    WORD x, WORD y, ULONG seconds, ULONG micros, const char *translated,
+    size_t translated_length)
 {
     enum miga80_picker_action action;
-    if (message_class == IDCMP_RAWKEY && is_quit_key(code, qualifiers)) { return 1; }
+    char fallback[8];
+
+    if (ui->browsing && ui->mode == DEMO_UI_SOURCE) {
+        ui->mode = DEMO_UI_OPEN;
+    }
+    if (message_class == IDCMP_RAWKEY && translated == NULL &&
+        (code & IECODE_UP_PREFIX) == 0U) {
+        translated_length = translate_raw_key(code, qualifiers, NULL,
+                                               fallback, sizeof(fallback));
+        translated = fallback;
+    }
     if (message_class == IDCMP_RAWKEY && code == (DEMO_RAWKEY_ESCAPE | 0x80U)) {
         escape_held = 0;
     }
-    if (ui->browsing) {
+    if (ui->mode == DEMO_UI_SAVE_AS) {
+        return ui_save_as_event(ui, screen, chunky, message_class, code,
+            qualifiers, x, y, seconds, micros, translated,
+            translated_length);
+    }
+    if (ui->mode == DEMO_UI_UNSAVED || ui->mode == DEMO_UI_OVERWRITE) {
+        if (message_class != IDCMP_RAWKEY) { return 0; }
+        return ui_prompt_event(ui, screen, chunky,
+            miga80_editor_decode_key(code, editor_key_qualifiers(qualifiers),
+                                     translated, translated_length),
+            translated, translated_length);
+    }
+    if (ui->mode == DEMO_UI_OPEN) {
+        if (message_class == IDCMP_RAWKEY &&
+            miga80_editor_decode_key(code, editor_key_qualifiers(qualifiers),
+                                     translated, translated_length) ==
+                MIGA80_EDITOR_COMMAND_QUIT) {
+            return ui_request_destructive(ui, screen, chunky,
+                                          DEMO_PENDING_QUIT);
+        }
         if (message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) {
             action = miga80_file_picker_mouse(&ui->picker, x, y, seconds, micros);
         } else if (message_class == IDCMP_RAWKEY) {
             action = miga80_file_picker_key(&ui->picker, code);
         } else { return 0; }
-        if (action == MIGA80_PICKER_LOAD) { return ui_load(ui, screen, chunky) ? 0 : -1; }
-        if (action == MIGA80_PICKER_CANCEL) { return ui_source(ui, screen, chunky) ? 0 : -1; }
-        if (action == MIGA80_PICKER_REDRAW) { return ui_picker(ui, screen, chunky) ? 0 : -1; }
+        if (action == MIGA80_PICKER_LOAD) {
+            return ui_load(ui, screen, chunky) ? 0 : -1;
+        }
+        if (action == MIGA80_PICKER_CANCEL) {
+            return ui_source(ui, screen, chunky) ? 0 : -1;
+        }
+        if (action == MIGA80_PICKER_REDRAW) {
+            return ui_picker(ui, screen, chunky) ? 0 : -1;
+        }
         return 0;
     }
     if ((ui->state == DEMO_STATE_SOURCE || ui->state == DEMO_STATE_ERROR) &&
-        ((message_class == IDCMP_RAWKEY && code == 0x51U &&
-          (qualifiers & IEQUALIFIER_REPEAT) == 0U) ||
-         (message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN &&
-          y >= 0 && y < 8 && x >= 220 && x < 256))) {
-        ui->browsing = 1;
-        (void)miga80_file_picker_scan(&ui->picker, ui->picker.path);
-        return ui_picker(ui, screen, chunky) ? 0 : -1;
+        message_class == IDCMP_MOUSEBUTTONS && code == SELECTDOWN &&
+        y >= 0 && y < 8 && x >= 184 && x < 256) {
+        return ui_request_destructive(ui, screen, chunky, DEMO_PENDING_OPEN);
     }
     if (message_class == IDCMP_RAWKEY) {
-        return workflow_key(screen, chunky, &ui->metrics, report_path,
-                             &ui->state, code, qualifiers);
+        return ui_editor_event(ui, screen, chunky, report_path, code,
+                               qualifiers, translated, translated_length);
     }
     return 0;
 }
@@ -1393,18 +2045,24 @@ static int run_event_loop(struct Window *window, struct Screen *screen,
     miga80_file_picker_init(&ui.picker);
     (void)strcpy(ui.picker.path, "SYS:demos");
     ui.metrics = *metrics;
-    (void)snprintf(ui.source_path, sizeof(ui.source_path), "%s", browse ? "(no source loaded)" : source_path);
+    (void)snprintf(ui.source_path, sizeof(ui.source_path), "%s",
+                   browse ? "" : source_path);
+    if (!miga80_editor_init(&editor_document, source_buffer,
+            DEMO_SOURCE_CAPACITY, text_length(source_buffer),
+            editor_clipboard, DEMO_SOURCE_CAPACITY)) {
+        miga80_file_picker_free(&ui.picker);
+        return 0;
+    }
+    interactive_document = &editor_document;
+    interactive_metrics = &ui.metrics;
     interactive_source_path = ui.source_path;
     ui.browsing = browse;
+    ui.mode = browse ? DEMO_UI_OPEN : DEMO_UI_SOURCE;
     if (browse) {
         (void)miga80_file_picker_scan(&ui.picker, ui.picker.path);
         if (!ui_picker(&ui, screen, chunky)) { result = -1; }
     } else {
-        size_t pixel;
-        /* Preserve the startup status, including autoboot compile errors. */
-        for (pixel = 0U; pixel < DEMO_CHUNKY_BYTES; ++pixel) { chunky[pixel] >>= 4; }
-        draw_interactive_title(chunky);
-        if (!publish_ui(screen, chunky)) { result = -1; }
+        if (!ui_source(&ui, screen, chunky)) { result = -1; }
     }
     if (result == 0) {
         /* Keep the intro pointer hidden through the scan and first UI frame. */
@@ -1419,13 +2077,24 @@ static int run_event_loop(struct Window *window, struct Screen *screen,
             const UWORD code = message->Code, qualifiers = message->Qualifier;
             const WORD x = message->MouseX, y = message->MouseY;
             const ULONG seconds = message->Seconds, micros = message->Micros;
+            char translated[16];
+            size_t translated_length = 0U;
+            if (message_class == IDCMP_RAWKEY) {
+                /* IAddress can carry dead-key state and is valid only until
+                 * this IntuiMessage is replied. */
+                translated_length = translate_raw_key(code, qualifiers,
+                    message->IAddress, translated, sizeof(translated));
+            }
             ReplyMsg((struct Message *)message);
             result = ui_event(&ui, screen, chunky, report_path, message_class,
-                               code, qualifiers, x, y, seconds, micros);
+                               code, qualifiers, x, y, seconds, micros,
+                               translated, translated_length);
             if (result != 0) { break; }
         }
     }
     miga80_file_picker_free(&ui.picker);
+    interactive_document = NULL;
+    interactive_metrics = NULL;
     interactive_source_path = NULL;
     return result > 0;
 }
@@ -1446,19 +2115,33 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
 {
     struct demo_ui ui;
     int passed = 0, i, round;
+    size_t saved_size = 0U;
+    unsigned int editor_compile_attempts = 0U;
     ULONG baseline = 0U;
     const ULONG signals = FindTask(NULL)->tc_SigAlloc;
-    const char *bad[] = {"Broken.lua", "Huge.lua", "Long.lua", "Rows.lua", "Gone.lua"};
+    const char *bad[] = {"Broken.lua", "Huge.lua", "Gone.lua"};
+    const char ctrl_c = 3, ctrl_q = 17, ctrl_s = 19;
     (void)memset(&ui, 0, sizeof(ui));
     miga80_file_picker_init(&ui.picker);
     ui.metrics = *metrics;
     (void)strcpy(ui.source_path, "SYS:demos/default.lua");
+    if (!miga80_editor_init(&editor_document, source_buffer,
+            DEMO_SOURCE_CAPACITY, text_length(source_buffer),
+            editor_clipboard, DEMO_SOURCE_CAPACITY)) {
+        browser_failure = "editor_init";
+        goto done;
+    }
+    interactive_document = &editor_document;
+    interactive_metrics = &ui.metrics;
     interactive_source_path = ui.source_path;
 #define BROWSER_CHECK(label, condition) \
     do { browser_failure = (label); if (!(condition)) { goto done; } } while (0)
-#define BROWSER_KEY(code) ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY, (code), 0U, 0, 0, 0U, 0U)
+#define BROWSER_KEY(code) ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY, (code), 0U, 0, 0, 0U, 0U, NULL, 0U)
 #define BROWSER_CLICK(x, y, seconds, micros) \
-    ui_event(&ui, screen, chunky, NULL, IDCMP_MOUSEBUTTONS, SELECTDOWN, 0U, (x), (y), (seconds), (micros))
+    ui_event(&ui, screen, chunky, NULL, IDCMP_MOUSEBUTTONS, SELECTDOWN, 0U, (x), (y), (seconds), (micros), NULL, 0U)
+#define EDITOR_KEY(code, qualifiers, text, length) \
+    ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY, (code), (qualifiers), \
+             0, 0, 0U, 0U, (text), (length))
     BROWSER_CHECK("scan_demos", miga80_file_picker_scan(&ui.picker, "SYS:demos") &&
         ui.picker.count == 6 && strcmp(ui.picker.entries[0].name, "cube-chunky.lua") == 0 &&
         strcmp(ui.picker.entries[1].name, "cube-solid-chunky.lua") == 0 &&
@@ -1497,19 +2180,29 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     BROWSER_CHECK("previous_page", BROWSER_CLICK(10, 235, 40U, 100000U) == 0 && ui.picker.first == 0);
     for (i = 0; i < 14; ++i) { BROWSER_CHECK("keyboard_scroll", BROWSER_KEY(0x4dU) == 0); }
     BROWSER_CHECK("keyboard_page_boundary", ui.picker.selected == 13 && ui.picker.first == 12);
-    for (i = 0; i < 5; ++i) {
+    for (i = 0; i < 3; ++i) {
         const uint32_t checksum = ui.metrics.source_checksum;
         ui.picker.selected = browser_find(&ui, bad[i]);
         BROWSER_CHECK("bad_file_found", ui.picker.selected >= 0);
-        if (i == 4) { BROWSER_CHECK("delete_test_fixture", DeleteFile("SYS:picker-test/Gone.lua")); }
+        if (i == 2) { BROWSER_CHECK("delete_test_fixture", DeleteFile("SYS:picker-test/Gone.lua")); }
         BROWSER_CHECK("bad_file_preserves_source", BROWSER_KEY(0x44U) == 0 && ui.browsing &&
             ui.metrics.source_checksum == checksum &&
             miga80_source_view_checksum(source_buffer, strlen(source_buffer)) == checksum &&
             strcmp(ui.source_path, "SYS:demos/layers.lua") == 0);
     }
+    ui.picker.selected = browser_find(&ui, "Long.lua");
+    BROWSER_CHECK("long_line_loads", BROWSER_KEY(0x44U) == 0 && !ui.browsing &&
+        ui.metrics.maximum_columns == 65U &&
+        strcmp(ui.source_path, "SYS:picker-test/Long.lua") == 0);
+    BROWSER_CHECK("long_line_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
+    ui.picker.selected = browser_find(&ui, "Rows.lua");
+    BROWSER_CHECK("many_rows_load", BROWSER_KEY(0x44U) == 0 && !ui.browsing &&
+        ui.metrics.source_lines == 31U &&
+        strcmp(ui.source_path, "SYS:picker-test/Rows.lua") == 0);
+    BROWSER_CHECK("many_rows_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
     BROWSER_CHECK("scan_failure_preserves_directory",
         !miga80_file_picker_scan(&ui.picker, "SYS:missing-directory") &&
-        strcmp(ui.picker.path, "SYS:picker-test") == 0 && ui.picker.count == 20);
+        strcmp(ui.picker.path, "SYS:picker-test") == 0 && ui.picker.count == 19);
     ui.picker.selected = browser_find(&ui, "empty");
     BROWSER_CHECK("empty_directory", BROWSER_KEY(0x44U) == 0 && ui.picker.count == 0 && ui.browsing);
     BROWSER_CHECK("empty_click", BROWSER_CLICK(40, 44, 50U, 0U) == 0 && ui.picker.selected == -1 && ui.browsing);
@@ -1520,7 +2213,7 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     BROWSER_CHECK("sys_root", BROWSER_CLICK(10, 26, 51U, 0U) == 0 && strcmp(ui.picker.path, "SYS:") == 0);
     BROWSER_CHECK("root_parent", BROWSER_KEY(0x41U) == 0 && strcmp(ui.picker.path, "SYS:") == 0);
     BROWSER_CHECK("cancel_preserves_source", BROWSER_KEY(DEMO_RAWKEY_ESCAPE) == 0 && !ui.browsing &&
-        strcmp(ui.source_path, "SYS:demos/layers.lua") == 0 && verify_source_view(screen, chunky));
+        strcmp(ui.source_path, "SYS:picker-test/Rows.lua") == 0 && verify_source_view(screen, chunky));
     for (round = 0; round < 4; ++round) {
         for (i = 0; i < 4; ++i) {
             BROWSER_CHECK("repeat_scan", miga80_file_picker_scan(&ui.picker, "SYS:demos") &&
@@ -1530,18 +2223,88 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
         BROWSER_CHECK("memory_no_growth", round == 0 || AvailMem(MEMF_PUBLIC) >= baseline);
         baseline = AvailMem(MEMF_PUBLIC);
     }
-    ui.browsing = 1;
-    BROWSER_CHECK("ctrl_q_exit", ui_event(&ui, screen, chunky, NULL, IDCMP_RAWKEY,
-        0x10U, IEQUALIFIER_CONTROL, 0, 0, 0U, 0U) == 1);
+    BROWSER_CHECK("edited_compile_fixture", miga80_editor_set_text(
+        &editor_document,
+        "function main(): void\n  pset(1, 1, 3)\nend\n", 42U) ==
+            MIGA80_EDITOR_OK);
+    ui.source_path[0] = '\0';
+    BROWSER_CHECK("edited_compile_view", ui_source(&ui, screen, chunky));
+    editor_document.cursor = editor_document.length;
+    editor_compile_attempts = compile_attempts;
+    BROWSER_CHECK("edited_source_insert", EDITOR_KEY(0U, 0U, " ", 1U) == 0 &&
+        editor_document.dirty && editor_document.length == 43U);
+    BROWSER_CHECK("edited_source_run", BROWSER_KEY(DEMO_RAWKEY_F5) == 0);
+    BROWSER_CHECK("edited_source_result", ui.state == DEMO_STATE_RESULT);
+    BROWSER_CHECK("edited_source_attempt",
+        compile_attempts == editor_compile_attempts + 1U);
+    BROWSER_CHECK("edited_source_return", BROWSER_KEY(DEMO_RAWKEY_ESCAPE) == 0 &&
+        ui.state == DEMO_STATE_SOURCE && editor_document.dirty);
+    BROWSER_CHECK("editor_fixture", miga80_editor_set_text(&editor_document,
+        "abc\ndef", 7U) == MIGA80_EDITOR_OK);
+    ui.source_path[0] = '\0';
+    BROWSER_CHECK("editor_view", ui_source(&ui, screen, chunky));
+    BROWSER_CHECK("shift_select", EDITOR_KEY(0x4eU, IEQUALIFIER_LSHIFT,
+        NULL, 0U) == 0 && EDITOR_KEY(0x4eU, IEQUALIFIER_LSHIFT,
+        NULL, 0U) == 0 && EDITOR_KEY(0x4eU, IEQUALIFIER_LSHIFT,
+        NULL, 0U) == 0 && miga80_editor_has_selection(&editor_document));
+    BROWSER_CHECK("clipboard_cut_paste",
+        EDITOR_KEY(0U, IEQUALIFIER_CONTROL, &ctrl_c, 1U) == 0 &&
+        strcmp(editor_document.clipboard, "abc") == 0 &&
+        EDITOR_KEY(0U, IEQUALIFIER_CONTROL, "\030", 1U) == 0 &&
+        EDITOR_KEY(0U, IEQUALIFIER_CONTROL, "\026", 1U) == 0 &&
+        strcmp(editor_document.text, "abc\ndef") == 0);
+    BROWSER_CHECK("dirty_open_cancel",
+        EDITOR_KEY(0x51U, 0U, NULL, 0U) == 0 &&
+        ui.mode == DEMO_UI_UNSAVED &&
+        EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
+        ui.mode == DEMO_UI_SOURCE && editor_document.dirty &&
+        EDITOR_KEY(0x51U, 0U, NULL, 0U) == 0 &&
+        EDITOR_KEY(0U, 0U, "d", 1U) == 0 && ui.mode == DEMO_UI_OPEN &&
+        EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
+        ui.mode == DEMO_UI_SOURCE && editor_document.dirty);
+    (void)DeleteFile("RAM:M80EDIT.LUA");
+    (void)strcpy(ui.picker.path, "RAM:");
+    BROWSER_CHECK("save_as_open", EDITOR_KEY(0U,
+        IEQUALIFIER_CONTROL | IEQUALIFIER_LSHIFT, &ctrl_s, 1U) == 0 &&
+        ui.mode == DEMO_UI_SAVE_AS);
+    BROWSER_CHECK("save_as_name", EDITOR_KEY(0U, 0U, "M80EDIT.LUA", 11U) == 0 &&
+        strcmp(ui.save_name, "M80EDIT.LUA") == 0);
+    BROWSER_CHECK("save_as_publish", EDITOR_KEY(0x44U, 0U, "\r", 1U) == 0 &&
+        ui.mode == DEMO_UI_SOURCE && !editor_document.dirty &&
+        strcmp(ui.source_path, "RAM:M80EDIT.LUA") == 0 &&
+        read_source(ui.source_path, pending_source, &saved_size) && saved_size == 7U &&
+        memcmp(pending_source, "abc\ndef", 7U) == 0);
+    BROWSER_CHECK("save_as_overwrite_prompt", EDITOR_KEY(0U,
+        IEQUALIFIER_CONTROL | IEQUALIFIER_LSHIFT, &ctrl_s, 1U) == 0 &&
+        EDITOR_KEY(0x44U, 0U, "\r", 1U) == 0 &&
+        ui.mode == DEMO_UI_OVERWRITE &&
+        EDITOR_KEY(0U, 0U, "n", 1U) == 0 && ui.mode == DEMO_UI_SAVE_AS &&
+        EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
+        ui.mode == DEMO_UI_SOURCE);
+    BROWSER_CHECK("edit_after_save", EDITOR_KEY(0U, 0U, "!", 1U) == 0 &&
+        editor_document.dirty && strcmp(editor_document.text, "abc!\ndef") == 0);
+    BROWSER_CHECK("quit_cancel", EDITOR_KEY(0U, IEQUALIFIER_CONTROL,
+        &ctrl_q, 1U) == 0 && ui.mode == DEMO_UI_UNSAVED &&
+        EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
+        ui.mode == DEMO_UI_SOURCE && editor_document.dirty);
+    BROWSER_CHECK("quit_save", EDITOR_KEY(0U, IEQUALIFIER_CONTROL,
+        &ctrl_q, 1U) == 0 && EDITOR_KEY(0U, 0U, "s", 1U) == 1 &&
+        !editor_document.dirty &&
+        read_source("RAM:M80EDIT.LUA", pending_source, &saved_size) &&
+        saved_size == 8U && memcmp(pending_source, "abc!\ndef", 8U) == 0);
+    (void)DeleteFile("RAM:M80EDIT.LUA");
     BROWSER_CHECK("signals_released", FindTask(NULL)->tc_SigAlloc == signals);
     passed = 1;
     browser_failure = NULL;
 done:
     miga80_file_picker_free(&ui.picker);
+    interactive_document = NULL;
+    interactive_metrics = NULL;
     interactive_source_path = NULL;
 #undef BROWSER_CHECK
 #undef BROWSER_KEY
 #undef BROWSER_CLICK
+#undef EDITOR_KEY
     return passed;
 }
 
@@ -1556,7 +2319,12 @@ static int write_browser_report(const char *path, int passed)
             "all_six_demos_load=pass\nloaded_source_f5=pass\nresult_escape=pass\n"
             "f2_mouse_reopen=pass\nfolders_filter_pagination=pass\n"
             "invalid_missing_large_preserve_source=pass\nempty_directory=pass\n"
+            "long_lines_many_rows_load=pass\n"
             "parent_sys_root=pass\ncancel_preserves_source=pass\n"
+            "editor_selection_clipboard=pass\nsave_as_overwrite=pass\n"
+            "edited_source_f5=pass\n"
+            "dirty_open_cancel=pass\n"
+            "dirty_quit_save=pass\n"
             "memory_no_growth=pass\nctrl_q_exit=pass\nhosted_cleanup=pass\nresult=pass\n") :
             (write_text(output, "failure=") && write_text(output,
                 browser_failure != NULL ? browser_failure : "browser_setup_or_cleanup") &&
@@ -2341,11 +3109,19 @@ int main(int argc, char **argv)
         failure = "alloc_source_framebuffer";
         goto cleanup;
     }
-    if (miga80_source_view_render(chunky, DEMO_SCREEN_WIDTH, source_buffer,
-                                  source_size, &metrics) !=
-        MIGA80_SOURCE_VIEW_OK) {
-        failure = "render_source_view";
-        goto cleanup;
+    {
+        enum Miga80SourceViewStatus view_status = miga80_source_view_render(
+            chunky, DEMO_SCREEN_WIDTH, source_buffer, source_size, &metrics);
+
+        if (view_status != MIGA80_SOURCE_VIEW_OK &&
+            miga80_source_view_render_editor(chunky, DEMO_SCREEN_WIDTH,
+                source_buffer, source_size, 0U, MIGA80_EDITOR_NO_ANCHOR,
+                0U, 0U, "MIGA-80 / LUA SOURCE",
+                "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN", &metrics) !=
+                    MIGA80_SOURCE_VIEW_OK) {
+            failure = "render_source_view";
+            goto cleanup;
+        }
     }
 
     /*

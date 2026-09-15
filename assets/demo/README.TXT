@@ -33,18 +33,32 @@ PREV PAGE / NEXT PAGE browse long lists; Up/Down selects with the keyboard.
 The list shows folders and .lua files, sorted with folders first.
 ESC or CANCEL returns to the previous source without changing it.
 
-The source view is read-only. F2 or its top-right OPEN button reopens the
-selector. F5 compiles and runs the displayed source. ESC returns from the
-result or error screen, and stops a running demo. CTRL-Q closes MIGA-80.
-The shortcut follows the AmigaOS keyboard layout. No files are saved or
-modified by the selector. Runtime diagnostics go to RAM:MIGA80-BOOTED.TXT;
-normal use does not write to this floppy.
+The source view is editable on the existing 256x256 LORES screen. Type text or
+Return to insert, use Backspace/Delete and the arrow keys, and hold either
+Shift key with an arrow to select. CTRL-C, CTRL-X and CTRL-V use an internal
+MIGA-80 clipboard. Typed Tab inserts spaces to the next four-column stop;
+loaded tab bytes are preserved and displayed at the same stops. The current
+line and column appear in the footer. Long lines and files scroll.
 
-This preview displays at most 30 source lines, 64 columns per line, and
-4096 bytes. Sources must be printable ASCII with LF newlines. An unreadable,
-oversized or unsupported source leaves the previous source intact and shows
-an error in the selector. Directories over 4096 entries are rejected without
-replacing the previous listing. Long names are shortened on screen only.
+F2 or the top OPEN button reopens the selector. CTRL-S saves to the current
+file; CTRL-SHIFT-S opens Save As. Save As accepts a filename of 1 to 30
+characters and lets you navigate to another directory or disk. Existing files
+require confirmation. Modified documents offer Save / Discard / Cancel before
+Open or CTRL-Q. Failed or cancelled file operations preserve the live source.
+The boot floppy may be write-protected or full, so save to RAM: for temporary
+work or insert a writable project disk for persistent work.
+
+F5 compiles and runs the live in-memory source without saving it first. ESC
+returns from the result or error screen, and stops a running demo. CTRL-Q
+closes MIGA-80. Text and shortcuts follow the AmigaOS keyboard layout.
+Runtime diagnostics go to RAM:MIGA80-BOOTED.TXT.
+
+Documents are limited to 16 KiB and use printable ASCII, tabs and LF newlines;
+CRLF files are normalized to LF when loaded. An unreadable, oversized or
+unsupported source leaves the previous source intact and shows an error in the
+selector. Directories over 4096 entries are rejected without replacing the
+previous listing. Long names are shortened on screen only. HIRES editing is
+planned but is not part of this release.
 
 RUNTIME
 

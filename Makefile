@@ -373,6 +373,11 @@ SOURCE_VIEW_HOST_TEST_PROGRAM := $(SOURCE_VIEW_HOST_BUILD_DIR)/test
 SOURCE_VIEW_HOST_EXPECTED := tests/host/source-view/expected.txt
 SOURCE_VIEW_HOST_REPORT := $(REPORT_DIR)/source-view-host.txt
 SOURCE_VIEW_HOST_PREVIEW := $(REPORT_DIR)/source-view.ppm
+EDITOR_SOURCE := src/ui/editor.c
+EDITOR_HEADER := src/ui/editor.h
+EDITOR_HOST_TEST_SOURCE := tests/host/editor/main.c
+EDITOR_HOST_TEST_PROGRAM := $(HOST_BUILD_DIR)/editor/test
+EDITOR_HOST_REPORT := $(REPORT_DIR)/editor-host.txt
 COMPILER_ENCODER_TEST_BUILD_DIR := $(HOST_BUILD_DIR)/compiler-encoder
 COMPILER_ENCODER_TEST_SOURCE := tests/host/compiler-encoder/main.c
 COMPILER_ENCODER_TEST_PROGRAM := $(COMPILER_ENCODER_TEST_BUILD_DIR)/test
@@ -429,10 +434,10 @@ BOOT_LOGO_HEADER := build/generated/boot_logo_data.h
 BOOT_JINGLE_OBJECT := build/amiga/source-view/boot_jingle.o
 MIGA80_DEMO_BUILD_DIR := $(AMIGA_BUILD_DIR)/source-view
 PTPLAYER_OBJECT := $(AMIGA_BUILD_DIR)/source-view/ptplayer.o
-MIGA80_DEMO_SOURCE := src/demo/music_host.c src/audio/mod.c src/demo/intro.c src/demo/intro_effect.c src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c \
+MIGA80_DEMO_SOURCE := src/demo/music_host.c src/audio/mod.c src/demo/intro.c src/demo/intro_effect.c src/demo/file_picker.c src/demo/main.c src/demo/supervisor.c src/demo/stop_test.c $(EDITOR_SOURCE) \
 	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/triangle.c src/graphics/c2p4_reference.c \
 	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
-MIGA80_DEMO_HEADERS := src/demo/music_host.h src/audio/mod.h src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h \
+MIGA80_DEMO_HEADERS := src/demo/music_host.h src/audio/mod.h src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h $(EDITOR_HEADER) \
 	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/music_bridge.S src/demo/runtime_guarded.S src/demo/drawing_bridge.S src/graphics/triangle_m68k.S \
 	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
@@ -501,7 +506,7 @@ C2P_BENCHMARK_CFLAGS = $(filter-out -Os,$(TARGET_CFLAGS)) -O2
 	exclusive-graphics-benchmark-fs-uae \
 	exclusive-graphics-benchmark-fs-uae-fast exclusive-graphics-test-adf \
 	exclusive-graphics-test-adf-inspect exclusive-graphics-test-adf-fs-uae \
-	source-view-test compiler-encoder-test compiler-encoder-musashi-test \
+	source-view-test editor-test compiler-encoder-test compiler-encoder-musashi-test \
 	compiler-call-test \
 	miga80-demo miga80-demo-inspect miga80-demo-adf \
 	miga80-demo-adf-inspect miga80-demo-adf-fs-uae \
@@ -565,6 +570,18 @@ source-view-test: $(SOURCE_VIEW_HOST_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
 	$(SOURCE_VIEW_HOST_TEST_PROGRAM) $(SOURCE_VIEW_FIXTURE) \
 		$(SOURCE_VIEW_HOST_PREVIEW) >$(SOURCE_VIEW_HOST_REPORT)
 	diff -u $(SOURCE_VIEW_HOST_EXPECTED) $(SOURCE_VIEW_HOST_REPORT)
+
+$(EDITOR_HOST_TEST_PROGRAM): $(EDITOR_HOST_TEST_SOURCE) $(EDITOR_SOURCE) \
+		$(EDITOR_HEADER) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(PROJECT_CPPFLAGS) $(HOST_CFLAGS) \
+		-fsanitize=address,undefined $(EDITOR_HOST_TEST_SOURCE) \
+		$(EDITOR_SOURCE) -o $@
+
+editor-test: $(EDITOR_HOST_TEST_PROGRAM)
+	@mkdir -p $(REPORT_DIR)
+	$(EDITOR_HOST_TEST_PROGRAM) >$(EDITOR_HOST_REPORT)
+	cat $(EDITOR_HOST_REPORT)
 
 compiler-encoder-test: $(COMPILER_ENCODER_TEST_PROGRAM) \
 		$(SOURCE_VIEW_FIXTURE) $(COMPILER_ENCODER_TEST_EXPECTED)
@@ -1382,7 +1399,7 @@ check: solid-cube-test triangle-asm-test intro-test c2p4-asm-test animation-test
 	compiler-spill-test compiler-amiga-test c2p-test \
 	c2p4-test graphics-reference-test aga-reference-test \
 	graphics-report-test chipram-report-test exclusive-graphics-report-test \
-	source-view-test compiler-encoder-test compiler-encoder-musashi-test \
+	source-view-test editor-test compiler-encoder-test compiler-encoder-musashi-test \
 	compiler-call-test \
 	chipram-benchmark exclusive-graphics-benchmark inspect vamos-test \
 	aga-screen-smoke
