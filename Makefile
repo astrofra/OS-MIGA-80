@@ -1495,7 +1495,7 @@ build/distribution/miga80-cube-chunky-kalms.adf: $(MIGA80_DEMO_PROGRAM) assets/d
 MIGA80_RELEASE_DEMOS := $(sort $(wildcard assets/demo/*.lua))
 MIGA80_RELEASE_ADF := release/miga80.adf
 MIGA80_RELEASE_MANIFEST := release/miga80.manifest.json
-.PHONY: release release-fs-uae
+.PHONY: release release-fs-uae release-boot-fs-uae
 release: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIGA80_RELEASE_DEMOS) assets/demo \
         $(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Browser $(MIGA80_DEMO_README) \
@@ -1506,6 +1506,10 @@ $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIG
 release-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \
 		tests/smoke/source-view-adf/browser-expected.txt BROWSERTEST
+
+release-boot-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
+	MIGA80_FS_UAE_TIMEOUT_SECONDS=60 $(MIGA80_DEMO_ADF_TESTER) $< \
+		tests/smoke/source-view-adf/browse-ready-expected.txt BROWSE
 
 $(BOOT_LOGO_HEADER): works/logo.png scripts/generate-boot-logo.py
 	$(PYTHON) scripts/generate-boot-logo.py $< $@

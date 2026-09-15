@@ -1,0 +1,3 @@
+miga80_startup_report=1
+browser=ready
+result=pass

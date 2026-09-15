@@ -3,7 +3,7 @@
   "edition": "development preview",
   "adf": "miga80.adf",
   "adf_bytes": 901120,
-  "adf_sha256": "7b4f81b477eba6c4b1591b88befeab1451d9287a3366b7a164f6a39209467006",
+  "adf_sha256": "9efb78f17b2a8467e1759de13b65bf1f60d54c52c1acb25e0bd234f136daacf8",
   "filesystem": "OFS",
   "volume": "MIGA80",
   "startup": "centered glitch logo + procedural jingle, then SYS:demos file selector",
@@ -17,8 +17,8 @@
   "files": {
     "MIGA80": {
       "source": "build/amiga/source-view/miga80",
-      "bytes": 181412,
-      "sha256": "290dd39254879c75715822b6c83ab220f94824f80b888c5cb7a5f53875e61584"
+      "bytes": 185860,
+      "sha256": "723b5434351f53aa35673085200edf87cc606389aa1a613a7e37d7ac57da9bc9"
     },
     "S/Startup-Sequence": {
       "source": "assets/demo/Startup-Browser",
@@ -87,27 +87,27 @@
     }
   },
   "filesystem_listing": [
-    "MIGA80                                           VOLUME  --------  15.09.2026 10:21:46.00  DOS0:ofs #512",
-    "  DATA                                              DIR  ----rwed  15.09.2026 10:21:46.00  ",
-    "    FONT4X8.BIN                                     780  ----rwed  15.09.2026 10:21:46.00  ",
-    "  demos                                             DIR  ----rwed  15.09.2026 10:21:46.00  ",
-    "    cube-chunky.lua                                 948  ----rwed  15.09.2026 10:21:46.00  ",
-    "    cube-solid-chunky.lua                          1145  ----rwed  15.09.2026 10:21:46.00  ",
-    "    cube-solid.lua                                 1146  ----rwed  15.09.2026 10:21:46.00  ",
-    "    cube.lua                                        949  ----rwed  15.09.2026 10:21:46.00  ",
-    "    default.lua                                     643  ----rwed  15.09.2026 10:21:46.00  ",
-    "    layers.lua                                      406  ----rwed  15.09.2026 10:21:46.00  ",
-    "  KALMS.TXT                                        2470  ----rwed  15.09.2026 10:21:46.00  ",
-    "  LICENSE.TXT                                      1074  ----rwed  15.09.2026 10:21:46.00  ",
-    "  MIGA80                                         181412  ----rwed  15.09.2026 10:21:46.00  ",
-    "  mods                                              DIR  ----rwed  15.09.2026 10:21:46.00  ",
-    "    93_10_12_A_SYNTH_1.mod                        20092  ----rwed  15.09.2026 10:21:46.00  ",
-    "  PTPLAYER.TXT                                     1211  ----rwed  15.09.2026 10:21:46.00  ",
-    "  README.TXT                                       8017  ----rwed  15.09.2026 10:21:46.00  ",
-    "  S                                                 DIR  ----rwed  15.09.2026 10:21:46.00  ",
-    "    Startup-Sequence                                 62  ----rwed  15.09.2026 10:21:46.00  ",
-    "sum:           483  241Ki        247296",
-    "data:          459  229Ki        235008  95.03%",
-    "fs:             24   12Ki         12288   4.97%"
+    "MIGA80                                           VOLUME  --------  15.09.2026 21:34:16.00  DOS0:ofs #512",
+    "  DATA                                              DIR  ----rwed  15.09.2026 21:34:16.00  ",
+    "    FONT4X8.BIN                                     780  ----rwed  15.09.2026 21:34:16.00  ",
+    "  demos                                             DIR  ----rwed  15.09.2026 21:34:16.00  ",
+    "    cube-chunky.lua                                 948  ----rwed  15.09.2026 21:34:16.00  ",
+    "    cube-solid-chunky.lua                          1145  ----rwed  15.09.2026 21:34:16.00  ",
+    "    cube-solid.lua                                 1146  ----rwed  15.09.2026 21:34:16.00  ",
+    "    cube.lua                                        949  ----rwed  15.09.2026 21:34:16.00  ",
+    "    default.lua                                     643  ----rwed  15.09.2026 21:34:16.00  ",
+    "    layers.lua                                      406  ----rwed  15.09.2026 21:34:16.00  ",
+    "  KALMS.TXT                                        2470  ----rwed  15.09.2026 21:34:16.00  ",
+    "  LICENSE.TXT                                      1074  ----rwed  15.09.2026 21:34:16.00  ",
+    "  MIGA80                                         185860  ----rwed  15.09.2026 21:34:16.00  ",
+    "  mods                                              DIR  ----rwed  15.09.2026 21:34:16.00  ",
+    "    93_10_12_A_SYNTH_1.mod                        20092  ----rwed  15.09.2026 21:34:16.00  ",
+    "  PTPLAYER.TXT                                     1211  ----rwed  15.09.2026 21:34:16.00  ",
+    "  README.TXT                                       8017  ----rwed  15.09.2026 21:34:16.00  ",
+    "  S                                                 DIR  ----rwed  15.09.2026 21:34:16.00  ",
+    "    Startup-Sequence                                 62  ----rwed  15.09.2026 21:34:16.00  ",
+    "sum:           492  246Ki        251904",
+    "data:          468  234Ki        239616  95.12%",
+    "fs:             24   12Ki         12288   4.88%"
   ]
 }

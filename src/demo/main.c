@@ -71,6 +71,9 @@
 #define DEMO_DEFAULT_REPORT "RAM:MIGA80-BOOTED.TXT"
 #define DEMO_RAWKEY_ESCAPE 0x45U
 #define DEMO_RAWKEY_F5 0x54U
+#define EDITOR_PLANAR_COLOR_BIT_0 2U
+#define EDITOR_PLANAR_COLOR_BIT_1 6U
+#define EDITOR_PLANAR_MASK 0x44U
 
 struct GfxBase *GfxBase = NULL;
 struct IntuitionBase *IntuitionBase = NULL;
@@ -126,6 +129,30 @@ static ULONG test_escape_delay = 100000U;
 static int test_unguarded;
 static int test_stalled_service;
 static unsigned int compile_attempts;
+
+enum editor_damage_kind {
+    EDITOR_DAMAGE_NONE = 0,
+    EDITOR_DAMAGE_ROW,
+    EDITOR_DAMAGE_TO_VIEW_END
+};
+
+static struct {
+    int valid;
+    size_t source_revision;
+    size_t source_length;
+    size_t source_lines;
+    size_t cursor;
+    size_t anchor;
+    size_t cursor_line;
+    size_t anchor_line;
+    size_t first_line;
+    size_t first_column;
+    char title[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+} editor_render_cache;
+static size_t editor_source_revision;
+static enum editor_damage_kind editor_damage;
+
+static struct BitMap *editor_planar_bitmap(struct Screen *screen);
 
 typedef char runtime_context_layout_check[
     sizeof(struct miga80_runtime_context) ==
@@ -838,6 +865,7 @@ static void place_in_playfield_one(uint8_t *chunky)
 
 static int publish_canonical(struct Screen *screen, uint8_t *chunky)
 {
+    editor_render_cache.valid = 0;
     place_in_playfield_one(chunky);
     if (!convert_source_view(screen, chunky)) {
         return 0;
@@ -854,6 +882,7 @@ static int publish_ui(struct Screen *screen, uint8_t *chunky)
     struct BitMap *bitmap = screen->RastPort.BitMap;
     uint8_t *planes[4];
     unsigned int plane;
+    editor_render_cache.valid = 0;
     if (bitmap == NULL || GetBitMapAttr(bitmap, BMA_DEPTH) != 8U) { return 0; }
     for (plane = 0U; plane < 4U; ++plane) {
         if (bitmap->Planes[plane * 2U] == NULL ||
@@ -894,6 +923,36 @@ static int verify_pixel(struct RastPort *rast_port, const uint8_t *chunky,
 
 static int verify_source_view(struct Screen *screen, const uint8_t *chunky)
 {
+    if (editor_render_cache.valid) {
+        static const UWORD samples[][2] = {
+            {0U, 0U}, {3U, 7U}, {8U, 12U}, {96U, 120U}, {4U, 252U}
+        };
+        struct BitMap *bitmap = editor_planar_bitmap(screen);
+        size_t sample;
+
+        if (bitmap == NULL) { return 0; }
+        for (sample = 0U; sample < sizeof(samples) / sizeof(samples[0]);
+             ++sample) {
+            const size_t x = samples[sample][0];
+            const size_t y = samples[sample][1];
+            const size_t byte = y * (size_t)bitmap->BytesPerRow + x / 8U;
+            const UBYTE mask = (UBYTE)(0x80U >> (x & 7U));
+            ULONG expected = 0U;
+
+            if ((((UBYTE *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_0])[byte] &
+                    mask) != 0U) {
+                expected |= 1UL << EDITOR_PLANAR_COLOR_BIT_0;
+            }
+            if ((((UBYTE *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_1])[byte] &
+                    mask) != 0U) {
+                expected |= 1UL << EDITOR_PLANAR_COLOR_BIT_1;
+            }
+            if (ReadPixel(&screen->RastPort, (LONG)x, (LONG)y) != expected) {
+                return 0;
+            }
+        }
+        return 1;
+    }
     return verify_pixel(&screen->RastPort, chunky, 0U, 0U) &&
            verify_pixel(&screen->RastPort, chunky, 3U, 7U) &&
            verify_pixel(&screen->RastPort, chunky, 8U, 12U) &&
@@ -901,19 +960,194 @@ static int verify_source_view(struct Screen *screen, const uint8_t *chunky)
            verify_pixel(&screen->RastPort, chunky, 4U, 252U);
 }
 
-static void draw_interactive_title(uint8_t *chunky)
+static uint32_t editor_planar_row_checksum(struct Screen *screen, size_t row)
 {
-    char title[65];
+    struct BitMap *bitmap = editor_planar_bitmap(screen);
+    size_t row_bytes, offset;
+    uint32_t first, second;
+
+    if (bitmap == NULL || row >= MIGA80_SOURCE_VIEW_ROWS) { return 0U; }
+    row_bytes = (size_t)bitmap->BytesPerRow *
+                MIGA80_SOURCE_VIEW_CELL_HEIGHT;
+    offset = row * row_bytes;
+    first = miga80_source_view_checksum(
+        (UBYTE *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_0] + offset,
+        row_bytes);
+    second = miga80_source_view_checksum(
+        (UBYTE *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_1] + offset,
+        row_bytes);
+    return first ^ ((second << 1U) | (second >> 31U));
+}
+
+static void format_interactive_title(char *title, size_t capacity)
+{
     const char *filename = interactive_source_path != NULL &&
                            interactive_source_path[0] != '\0'
                                ? (const char *)FilePart(
                                      (STRPTR)interactive_source_path)
                                : "(untitled)";
-    (void)snprintf(title, sizeof(title), "%-46.46s%c F2 OPEN  F5 RUN",
+    (void)snprintf(title, capacity, "%-46.46s%c F2 OPEN  F5 RUN",
                    filename,
                    interactive_document != NULL && interactive_document->dirty
                        ? '*' : ' ');
+}
+
+static void draw_interactive_title(uint8_t *chunky)
+{
+    char title[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+
+    format_interactive_title(title, sizeof(title));
     miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 0U, title, 9U, 2U);
+}
+
+static size_t editor_line_for_offset(
+    const struct Miga80EditorDocument *document, size_t offset)
+{
+    size_t index, line = 0U;
+
+    for (index = 0U; index < offset && index < document->length; ++index) {
+        if (document->text[index] == '\n') { ++line; }
+    }
+    return line;
+}
+
+static void editor_keep_cursor_visible(struct Miga80EditorDocument *document,
+                                       size_t line, size_t column)
+{
+    if (line < document->first_visible_line) {
+        document->first_visible_line = line;
+    } else if (line >= document->first_visible_line +
+                           MIGA80_SOURCE_VIEW_SOURCE_ROWS) {
+        document->first_visible_line =
+            line - MIGA80_SOURCE_VIEW_SOURCE_ROWS + 1U;
+    }
+    if (column < document->first_visible_column) {
+        document->first_visible_column = column;
+    } else if (column >= document->first_visible_column +
+                              MIGA80_SOURCE_VIEW_COLUMNS) {
+        document->first_visible_column =
+            column - MIGA80_SOURCE_VIEW_COLUMNS + 1U;
+    }
+}
+
+static struct BitMap *editor_planar_bitmap(struct Screen *screen)
+{
+    struct BitMap *bitmap;
+
+    if (screen == NULL) { return NULL; }
+    bitmap = screen->RastPort.BitMap;
+    if (bitmap == NULL || GetBitMapAttr(bitmap, BMA_DEPTH) !=
+                              DEMO_SCREEN_DEPTH ||
+        bitmap->BytesPerRow < MIGA80_SOURCE_VIEW_PLANAR_BYTES_PER_ROW ||
+        bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_0] == NULL ||
+        bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_1] == NULL) {
+        return NULL;
+    }
+    return bitmap;
+}
+
+static int editor_render_planar_rows(struct BitMap *bitmap,
+                                     const char *title, const char *footer,
+                                     size_t first_row, size_t row_count)
+{
+    return miga80_source_view_render_editor_planar_rows(
+        (uint8_t *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_0],
+        (uint8_t *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_1],
+        (size_t)bitmap->BytesPerRow, interactive_document->text,
+        interactive_document->length, interactive_document->cursor,
+        interactive_document->anchor,
+        interactive_document->first_visible_line,
+        interactive_document->first_visible_column, title, footer,
+        first_row, row_count) == MIGA80_SOURCE_VIEW_OK;
+}
+
+static int editor_render_planar_full(struct BitMap *bitmap,
+                                     const char *title, const char *footer)
+{
+    size_t plane;
+
+    WaitBlit();
+    for (plane = 0U; plane < DEMO_SCREEN_DEPTH; ++plane) {
+        if (bitmap->Planes[plane] == NULL) { return 0; }
+        (void)memset(bitmap->Planes[plane], 0,
+                     (size_t)bitmap->BytesPerRow * DEMO_SCREEN_HEIGHT);
+    }
+    return miga80_source_view_render_editor_planar(
+        (uint8_t *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_0],
+        (uint8_t *)bitmap->Planes[EDITOR_PLANAR_COLOR_BIT_1],
+        (size_t)bitmap->BytesPerRow, interactive_document->text,
+        interactive_document->length, interactive_document->cursor,
+        interactive_document->anchor,
+        interactive_document->first_visible_line,
+        interactive_document->first_visible_column, title, footer) ==
+            MIGA80_SOURCE_VIEW_OK;
+}
+
+static int editor_scroll_planar(struct BitMap *bitmap, int direction,
+                                const char *title, const char *footer)
+{
+    const LONG source_y = direction > 0 ? 16L : 8L;
+    const LONG destination_y = direction > 0 ? 8L : 16L;
+    const size_t exposed_row = direction > 0
+                                   ? MIGA80_SOURCE_VIEW_SOURCE_ROWS : 1U;
+
+    if (BltBitMap(bitmap, 0L, source_y, bitmap, 0L, destination_y,
+                  (LONG)DEMO_SCREEN_WIDTH,
+                  (LONG)((MIGA80_SOURCE_VIEW_SOURCE_ROWS - 1U) *
+                         MIGA80_SOURCE_VIEW_CELL_HEIGHT),
+                  0xc0U, EDITOR_PLANAR_MASK, NULL) != 2L) {
+        return 0;
+    }
+    WaitBlit();
+    return editor_render_planar_rows(bitmap, title, footer, exposed_row, 1U);
+}
+
+static void editor_extend_damage(size_t line, int *has_damage,
+                                 size_t *first, size_t *last)
+{
+    if (!*has_damage) {
+        *first = *last = line;
+        *has_damage = 1;
+    } else {
+        if (line < *first) { *first = line; }
+        if (line > *last) { *last = line; }
+    }
+}
+
+static int editor_render_source_lines(struct BitMap *bitmap,
+                                      const char *title, const char *footer,
+                                      size_t first, size_t last)
+{
+    const size_t view_first = interactive_document->first_visible_line;
+    const size_t view_last = view_first + MIGA80_SOURCE_VIEW_SOURCE_ROWS - 1U;
+    size_t clipped_first, clipped_last;
+
+    if (last < view_first || first > view_last) { return 1; }
+    clipped_first = first < view_first ? view_first : first;
+    clipped_last = last > view_last ? view_last : last;
+    return editor_render_planar_rows(bitmap, title, footer,
+        1U + clipped_first - view_first,
+        clipped_last - clipped_first + 1U);
+}
+
+static void editor_remember_render(const char *title, size_t cursor_line,
+                                   size_t anchor_line,
+                                   size_t source_lines)
+{
+    editor_render_cache.valid = 1;
+    editor_render_cache.source_revision = editor_source_revision;
+    editor_render_cache.source_length = interactive_document->length;
+    editor_render_cache.source_lines = source_lines;
+    editor_render_cache.cursor = interactive_document->cursor;
+    editor_render_cache.anchor = interactive_document->anchor;
+    editor_render_cache.cursor_line = cursor_line;
+    editor_render_cache.anchor_line = anchor_line;
+    editor_render_cache.first_line = interactive_document->first_visible_line;
+    editor_render_cache.first_column =
+        interactive_document->first_visible_column;
+    (void)snprintf(editor_render_cache.title,
+                   sizeof(editor_render_cache.title), "%s", title);
+    editor_damage = EDITOR_DAMAGE_NONE;
 }
 
 static int show_source_status(struct Screen *screen, uint8_t *chunky,
@@ -922,26 +1156,109 @@ static int show_source_status(struct Screen *screen, uint8_t *chunky,
     struct Miga80SourceViewMetrics scratch;
 
     if (interactive_document != NULL) {
+        struct BitMap *bitmap = editor_planar_bitmap(screen);
+        char title[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
         char footer[65];
-        size_t line, column;
+        size_t line, column, anchor_line, damage_first = 0U, damage_last = 0U;
+        const int source_changed = !editor_render_cache.valid ||
+            editor_render_cache.source_revision != editor_source_revision ||
+            editor_render_cache.source_length != interactive_document->length;
+        int has_damage = 0;
 
-        miga80_editor_ensure_cursor_visible(interactive_document,
-            MIGA80_SOURCE_VIEW_SOURCE_ROWS, MIGA80_SOURCE_VIEW_COLUMNS);
         miga80_editor_cursor_position(interactive_document, &line, &column);
+        editor_keep_cursor_visible(interactive_document, line, column);
+        anchor_line = interactive_document->anchor == MIGA80_EDITOR_NO_ANCHOR
+                          ? line
+                          : editor_line_for_offset(interactive_document,
+                                interactive_document->anchor);
+        format_interactive_title(title, sizeof(title));
         (void)snprintf(footer, sizeof(footer), "%-43.43s L%lu:C%lu",
                        status, (unsigned long)(line + 1U),
                        (unsigned long)(column + 1U));
-        if (miga80_source_view_render_editor(chunky, DEMO_SCREEN_WIDTH,
+        if (bitmap == NULL ||
+            (source_changed && miga80_source_view_measure_editor(
                 interactive_document->text, interactive_document->length,
-                interactive_document->cursor, interactive_document->anchor,
-                interactive_document->first_visible_line,
-                interactive_document->first_visible_column, "", footer,
-                &scratch) != MIGA80_SOURCE_VIEW_OK) {
+                &scratch) != MIGA80_SOURCE_VIEW_OK)) {
             return 0;
         }
-        draw_interactive_title(chunky);
-        if (interactive_metrics != NULL) { *interactive_metrics = scratch; }
-        return publish_ui(screen, chunky);
+        if (source_changed && interactive_metrics != NULL) {
+            *interactive_metrics = scratch;
+        }
+        if (!editor_render_cache.valid) {
+            if (!editor_render_planar_full(bitmap, title, footer)) { return 0; }
+        } else {
+            const int same_horizontal_view =
+                editor_render_cache.first_column ==
+                    interactive_document->first_visible_column;
+            const long vertical_delta =
+                (long)interactive_document->first_visible_line -
+                (long)editor_render_cache.first_line;
+
+            if (!source_changed && same_horizontal_view &&
+                (vertical_delta == 1L || vertical_delta == -1L)) {
+                if (!editor_scroll_planar(bitmap, (int)vertical_delta,
+                                          title, footer)) {
+                    return 0;
+                }
+            } else if (!same_horizontal_view || vertical_delta != 0L) {
+                if (!editor_render_planar_rows(bitmap, title, footer, 1U,
+                        MIGA80_SOURCE_VIEW_SOURCE_ROWS)) {
+                    return 0;
+                }
+            }
+
+            if (source_changed) {
+                editor_extend_damage(editor_render_cache.cursor_line,
+                                     &has_damage, &damage_first, &damage_last);
+                editor_extend_damage(line, &has_damage,
+                                     &damage_first, &damage_last);
+                if (editor_render_cache.anchor != MIGA80_EDITOR_NO_ANCHOR) {
+                    editor_extend_damage(editor_render_cache.anchor_line,
+                        &has_damage, &damage_first, &damage_last);
+                }
+                if (interactive_document->anchor != MIGA80_EDITOR_NO_ANCHOR) {
+                    editor_extend_damage(anchor_line, &has_damage,
+                                         &damage_first, &damage_last);
+                }
+                if (editor_damage != EDITOR_DAMAGE_ROW) {
+                    damage_last = interactive_document->first_visible_line +
+                        MIGA80_SOURCE_VIEW_SOURCE_ROWS - 1U;
+                }
+            } else {
+                editor_extend_damage(editor_render_cache.cursor_line,
+                                     &has_damage, &damage_first, &damage_last);
+                editor_extend_damage(line, &has_damage,
+                                     &damage_first, &damage_last);
+                if (editor_render_cache.anchor != interactive_document->anchor) {
+                    if (editor_render_cache.anchor !=
+                            MIGA80_EDITOR_NO_ANCHOR) {
+                        editor_extend_damage(editor_render_cache.anchor_line,
+                            &has_damage, &damage_first, &damage_last);
+                    }
+                    if (interactive_document->anchor !=
+                            MIGA80_EDITOR_NO_ANCHOR) {
+                        editor_extend_damage(anchor_line, &has_damage,
+                                             &damage_first, &damage_last);
+                    }
+                }
+            }
+            if (has_damage && !editor_render_source_lines(bitmap, title,
+                    footer, damage_first, damage_last)) {
+                return 0;
+            }
+            if (strcmp(editor_render_cache.title, title) != 0 &&
+                !editor_render_planar_rows(bitmap, title, footer, 0U, 1U)) {
+                return 0;
+            }
+            if (!editor_render_planar_rows(bitmap, title, footer,
+                    MIGA80_SOURCE_VIEW_ROWS - 1U, 1U)) {
+                return 0;
+            }
+        }
+        editor_remember_render(title, line, anchor_line,
+            source_changed ? scratch.source_lines
+                           : editor_render_cache.source_lines);
+        return 1;
     }
     if (miga80_source_view_render_with_status(
             chunky, DEMO_SCREEN_WIDTH, source_buffer, text_length(source_buffer),
@@ -1346,6 +1663,8 @@ static int compile_and_run(struct Screen *screen, uint8_t *chunky,
     compiler_request.error_capacity = error_capacity;
     compiler_run_result = 0;
     run_compiler_on_dedicated_stack();
+    /* Runtime publication may have replaced either or both playfields. */
+    editor_render_cache.valid = 0;
 
     guards_intact = compiler_stack_guards_intact();
     release_compiler_stack();
@@ -1551,6 +1870,7 @@ static int ui_source_status(struct demo_ui *ui, struct Screen *screen,
     ui->browsing = 0;
     ui->mode = DEMO_UI_SOURCE;
     ui->state = DEMO_STATE_SOURCE;
+    editor_render_cache.valid = 0;
     return show_source_status(screen, chunky, status);
 }
 
@@ -1576,7 +1896,10 @@ static int ui_save_as_view(struct demo_ui *ui, struct Screen *screen,
 static int ui_prompt_view(struct demo_ui *ui, struct Screen *screen,
                           uint8_t *chunky, int overwrite)
 {
-    size_t pixel;
+    struct Miga80SourceViewMetrics scratch;
+    char title[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+    char footer[MIGA80_SOURCE_VIEW_COLUMNS + 1U];
+    size_t line, column;
     const char *line1 = overwrite
         ? "FILE EXISTS - REPLACE IT?"
         : "THE DOCUMENT HAS UNSAVED CHANGES";
@@ -1584,12 +1907,19 @@ static int ui_prompt_view(struct demo_ui *ui, struct Screen *screen,
         ? "Y REPLACE    N/ESC BACK"
         : "S SAVE    D DISCARD    ESC CANCEL";
 
-    if (!show_source_status(screen, chunky,
-            overwrite ? "CONFIRM REPLACEMENT" : "UNSAVED DOCUMENT")) {
+    miga80_editor_cursor_position(interactive_document, &line, &column);
+    editor_keep_cursor_visible(interactive_document, line, column);
+    format_interactive_title(title, sizeof(title));
+    (void)snprintf(footer, sizeof(footer), "%-43.43s L%lu:C%lu",
+        overwrite ? "CONFIRM REPLACEMENT" : "UNSAVED DOCUMENT",
+        (unsigned long)(line + 1U), (unsigned long)(column + 1U));
+    if (miga80_source_view_render_editor(chunky, DEMO_SCREEN_WIDTH,
+            interactive_document->text, interactive_document->length,
+            interactive_document->cursor, interactive_document->anchor,
+            interactive_document->first_visible_line,
+            interactive_document->first_visible_column, title, footer,
+            &scratch) != MIGA80_SOURCE_VIEW_OK) {
         return 0;
-    }
-    for (pixel = 0U; pixel < DEMO_CHUNKY_BYTES; ++pixel) {
-        chunky[pixel] >>= 4;
     }
     miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 13U, "", 9U, 2U);
     miga80_source_view_draw_row(chunky, DEMO_SCREEN_WIDTH, 14U, line1, 9U, 2U);
@@ -1875,6 +2205,28 @@ static int ui_prompt_event(struct demo_ui *ui, struct Screen *screen,
     return 0;
 }
 
+static int editor_range_has_newline(
+    const struct Miga80EditorDocument *document, size_t start, size_t end)
+{
+    size_t offset;
+
+    for (offset = start; offset < end && offset < document->length; ++offset) {
+        if (document->text[offset] == '\n') { return 1; }
+    }
+    return 0;
+}
+
+static int bytes_have_newline(const char *text, size_t length)
+{
+    size_t offset;
+
+    if (text == NULL) { return 0; }
+    for (offset = 0U; offset < length; ++offset) {
+        if (text[offset] == '\n') { return 1; }
+    }
+    return 0;
+}
+
 static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
                            uint8_t *chunky, const char *report_path,
                            UWORD code, UWORD qualifiers,
@@ -1886,6 +2238,11 @@ static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
         code, key_qualifiers, translated, translated_length);
     enum Miga80EditorStatus edit_status = MIGA80_EDITOR_OK;
     const char *status = "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN";
+    size_t selection_start, selection_end;
+    int source_edit = 0, multiline_edit = 0;
+
+    miga80_editor_selection(&editor_document, &selection_start,
+                            &selection_end);
 
     if (command == MIGA80_EDITOR_COMMAND_QUIT) {
         return ui_request_destructive(ui, screen, chunky, DEMO_PENDING_QUIT);
@@ -1914,19 +2271,42 @@ static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
         return 0;
     }
     if (command == MIGA80_EDITOR_COMMAND_TEXT) {
+        source_edit = translated_length != 0U;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end) ||
+            bytes_have_newline(translated, translated_length);
         edit_status = miga80_editor_insert(&editor_document, translated,
                                            translated_length);
     } else if (command == MIGA80_EDITOR_COMMAND_ENTER) {
+        source_edit = 1;
+        multiline_edit = 1;
         edit_status = miga80_editor_insert(&editor_document, "\n", 1U);
     } else if (command == MIGA80_EDITOR_COMMAND_TAB) {
         char spaces[4] = {' ', ' ', ' ', ' '};
         size_t line, column;
+        source_edit = 1;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end);
         miga80_editor_cursor_position(&editor_document, &line, &column);
         edit_status = miga80_editor_insert(&editor_document, spaces,
                                            4U - (column % 4U));
     } else if (command == MIGA80_EDITOR_COMMAND_BACKSPACE) {
+        source_edit = selection_start != selection_end ||
+                      editor_document.cursor != 0U;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end) ||
+            (selection_start == selection_end &&
+             editor_document.cursor != 0U &&
+             editor_document.text[editor_document.cursor - 1U] == '\n');
         miga80_editor_backspace(&editor_document);
     } else if (command == MIGA80_EDITOR_COMMAND_DELETE) {
+        source_edit = selection_start != selection_end ||
+                      editor_document.cursor < editor_document.length;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end) ||
+            (selection_start == selection_end &&
+             editor_document.cursor < editor_document.length &&
+             editor_document.text[editor_document.cursor] == '\n');
         miga80_editor_delete(&editor_document);
     } else if (command == MIGA80_EDITOR_COMMAND_LEFT ||
                command == MIGA80_EDITOR_COMMAND_RIGHT ||
@@ -1942,11 +2322,24 @@ static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
         edit_status = miga80_editor_copy(&editor_document);
         status = "COPIED TO INTERNAL CLIPBOARD";
     } else if (command == MIGA80_EDITOR_COMMAND_CUT) {
+        source_edit = selection_start != selection_end;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end);
         edit_status = miga80_editor_cut(&editor_document);
         status = "CUT TO INTERNAL CLIPBOARD";
     } else if (command == MIGA80_EDITOR_COMMAND_PASTE) {
+        source_edit = editor_document.clipboard_length != 0U;
+        multiline_edit = editor_range_has_newline(&editor_document,
+            selection_start, selection_end) ||
+            bytes_have_newline(editor_document.clipboard,
+                               editor_document.clipboard_length);
         edit_status = miga80_editor_paste(&editor_document);
         status = "PASTED FROM INTERNAL CLIPBOARD";
+    }
+    if (source_edit && edit_status == MIGA80_EDITOR_OK) {
+        ++editor_source_revision;
+        editor_damage = multiline_edit ? EDITOR_DAMAGE_TO_VIEW_END
+                                       : EDITOR_DAMAGE_ROW;
     }
     if (edit_status != MIGA80_EDITOR_OK) {
         status = edit_status == MIGA80_EDITOR_CAPACITY
@@ -2096,6 +2489,7 @@ static int run_event_loop(struct Window *window, struct Screen *screen,
     interactive_document = NULL;
     interactive_metrics = NULL;
     interactive_source_path = NULL;
+    editor_render_cache.valid = 0;
     return result > 0;
 }
 
@@ -2116,6 +2510,7 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     struct demo_ui ui;
     int passed = 0, i, round;
     size_t saved_size = 0U;
+    uint32_t scroll_row_checksum = 0U;
     unsigned int editor_compile_attempts = 0U;
     ULONG baseline = 0U;
     const ULONG signals = FindTask(NULL)->tc_SigAlloc;
@@ -2199,6 +2594,24 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     BROWSER_CHECK("many_rows_load", BROWSER_KEY(0x44U) == 0 && !ui.browsing &&
         ui.metrics.source_lines == 31U &&
         strcmp(ui.source_path, "SYS:picker-test/Rows.lua") == 0);
+    for (i = 0; i < 30; ++i) {
+        if (i == 29) {
+            scroll_row_checksum = editor_planar_row_checksum(screen, 2U);
+        }
+        BROWSER_CHECK("editor_planar_scroll_down", BROWSER_KEY(0x4dU) == 0);
+    }
+    BROWSER_CHECK("editor_planar_scroll_down_view",
+        editor_document.first_visible_line == 1U &&
+        scroll_row_checksum != 0U &&
+        editor_planar_row_checksum(screen, 1U) == scroll_row_checksum &&
+        verify_source_view(screen, chunky));
+    for (i = 0; i < 30; ++i) {
+        BROWSER_CHECK("editor_planar_scroll_up", BROWSER_KEY(0x4cU) == 0);
+    }
+    BROWSER_CHECK("editor_planar_scroll_up_view",
+        editor_document.first_visible_line == 0U &&
+        editor_planar_row_checksum(screen, 2U) == scroll_row_checksum &&
+        verify_source_view(screen, chunky));
     BROWSER_CHECK("many_rows_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
     BROWSER_CHECK("scan_failure_preserves_directory",
         !miga80_file_picker_scan(&ui.picker, "SYS:missing-directory") &&
@@ -2301,6 +2714,7 @@ done:
     interactive_document = NULL;
     interactive_metrics = NULL;
     interactive_source_path = NULL;
+    editor_render_cache.valid = 0;
 #undef BROWSER_CHECK
 #undef BROWSER_KEY
 #undef BROWSER_CLICK

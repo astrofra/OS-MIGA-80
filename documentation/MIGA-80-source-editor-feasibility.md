@@ -1,7 +1,7 @@
 # MIGA-80 Source Editor — Feasibility and Token Budget
 
 - **Date:** 2026-09-15
-- **Status:** W1–W6 implemented on the existing 256 × 256 LORES display; W7–W10 remain proposals. No HIRES editor display or physical-hardware validation has been performed.
+- **Status:** W1–W6 implemented on the existing 256 × 256 LORES display, including a two-plane direct-planar editor fast path and blitter-assisted one-row scrolling; W7–W10 remain proposals. No HIRES editor display or physical-hardware validation has been performed.
 - **Repository baseline:** `61d9840`
 - **Target:** PAL Amiga 1200, 68EC020, AGA, 2 MiB Chip RAM, no Fast RAM; the existing AmigaOS-hosted application.
 
@@ -19,6 +19,10 @@ W6**, is now implemented within the current architecture:
   no longer limited by viewport rows or columns.
 - The editable view currently uses the existing **256 × 256 LORES** screen and
   4 × 8 font. **No HIRES display work is included in this checkpoint.**
+- The interactive source view writes directly to two of PF1's physical planes
+  and redraws damaged rows only. A one-line vertical viewport change blits the
+  retained 29 text rows and draws only the newly exposed row. It remains
+  single-buffered; editor key handling does not wait for a vertical blank.
 
 The remaining display/runtime proposal is still feasible:
 
@@ -39,12 +43,12 @@ The implementation was inspected directly; older documentation sometimes describ
 
 | Area | Current implementation | Consequence for the editor |
 | --- | --- | --- |
-| Source display | [source_view.c](../src/ui/source_view.c) and [source_view.h](../src/ui/source_view.h): editable, scrolling 256 × 256 LORES viewport with cursor and selection using the 4 × 8 font. | Replace only the display/rendering layer for W7; document dimensions are already independent of the viewport. |
+| Source display | [source_view.c](../src/ui/source_view.c) and [source_view.h](../src/ui/source_view.h): editable, scrolling 256 × 256 LORES viewport with cursor and selection using the 4 × 8 font. Its interactive fast path renders directly into physical PF1 planes 2 and 6, producing the existing palette indices 0, 2, 8 and 10. Cursor motion redraws damaged text rows; a ±1-row vertical scroll uses the blitter with plane mask `0x44`, then draws the exposed row. | Replace only the display geometry/rendering layer for W7; document dimensions and dirty-region policy are already independent of the viewport. |
 | Source loading | [demo/main.c](../src/demo/main.c): transactional 16 KiB source and staging buffers; CRLF normalization and encoding/capacity validation are independent of rendering. | Retain these semantics when later display work lands. |
 | File selection | [file_picker.c](../src/demo/file_picker.c): directory navigation, pagination, keyboard and mouse actions, Save As filename entry and 512-byte path storage. | Adapt rendering and hit areas to HIRES only in W7. |
 | Input | [editor.c](../src/ui/editor.c) and `demo/main.c`: layout-aware translated text, editing commands, Shift selection, internal clipboard, one-shot command filtering and repeatable editing actions. Translation occurs before replying to IDCMP messages. | Retain this portable command layer across later screen transitions. |
 | Compile/run/stop | `demo/main.c` and [supervisor.c](../src/demo/supervisor.c): compile on a guarded stack, execute in a supervised task, stop with Esc. | Compile the live document and separate compile, display transition, execution and restoration. |
-| Display | `demo/main.c`: one Intuition-owned eight-plane LORES screen for source, browser and result. | Introduce distinct HIRES editor and LORES runtime display configurations. |
+| Display | `demo/main.c`: one Intuition-owned eight-plane LORES screen for source, browser and result. The source editor deliberately touches only two PF1 planes after a full view restore; the browser and runtime retain their existing paths. | Introduce distinct HIRES editor and LORES runtime display configurations only if W7 is pursued. The existing two-plane editor does not require closing or reopening the screen. |
 | Animation | [animation.c](../src/demo/animation.c): original screen plus two allocated animation buffers; assumes depth 8 and 32 bytes per row. | Convert to two borrowed runtime buffers, with explicit ownership and completion signals. |
 | Drawing | [drawing_host.c](../src/demo/drawing_host.c): 64 KiB byte-per-pixel source supplied by the caller, 32 KiB planar storage and an 8 KiB triangle mask. | Keep runtime graphics semantics; include all these allocations in the budget. |
 
@@ -64,7 +68,7 @@ The current runtime remains hosted by AmigaOS. Switching resolution does not imp
 | 4 / W4 | Implemented: staged 16 KiB load, encoding validation, CRLF normalization and dirty-document protection. |
 | 5 / W5 | Implemented: Save, Save As, overwrite confirmation, checked publication through temporary/backup names, and recoverable failure reporting. |
 | 6 / W6 | Implemented and host-tested: contiguous document model, insertion/deletion, cursor, preferred column and scrolling. |
-| 7 / W7 | Deferred: no HIRES screen or four-colour planar editor renderer in this checkpoint. |
+| 7 / W7 | Deferred: no HIRES screen or HIRES-specific renderer in this checkpoint. The implemented four-colour planar fast path remains LORES. |
 | 8–10 / W8–W10 | Deferred except for focused W1–W6 integration coverage inside the existing release/browser regression. |
 
 ### Estimation convention

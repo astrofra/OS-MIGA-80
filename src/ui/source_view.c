@@ -248,12 +248,16 @@ enum Miga80SourceViewStatus miga80_source_view_render(
         pixels, stride, source, source_size, view_status, metrics);
 }
 
-static enum Miga80SourceViewStatus measure_editor_source(
+enum Miga80SourceViewStatus miga80_source_view_measure_editor(
     const char *source, size_t source_size,
     struct Miga80SourceViewMetrics *metrics)
 {
     size_t index, columns = 0U, maximum_columns = 0U;
     size_t lines = source_size == 0U ? 0U : 1U;
+
+    if (source == NULL || metrics == NULL) {
+        return MIGA80_SOURCE_VIEW_INVALID_ARGUMENT;
+    }
 
     for (index = 0U; index < source_size; ++index) {
         const unsigned char character = (unsigned char)source[index];
@@ -275,6 +279,7 @@ static enum Miga80SourceViewStatus measure_editor_source(
     metrics->source_lines = lines;
     metrics->maximum_columns = maximum_columns;
     metrics->source_checksum = miga80_source_view_checksum(source, source_size);
+    metrics->framebuffer_checksum = 0U;
     return MIGA80_SOURCE_VIEW_OK;
 }
 
@@ -295,7 +300,7 @@ enum Miga80SourceViewStatus miga80_source_view_render_editor(
     if (stride < MIGA80_SOURCE_VIEW_WIDTH) {
         return MIGA80_SOURCE_VIEW_INVALID_STRIDE;
     }
-    status = measure_editor_source(source, source_size, metrics);
+    status = miga80_source_view_measure_editor(source, source_size, metrics);
     if (status != MIGA80_SOURCE_VIEW_OK) { return status; }
 
     selection_start = anchor == (size_t)-1 || anchor == cursor
@@ -379,4 +384,263 @@ enum Miga80SourceViewStatus miga80_source_view_render_editor(
     metrics->framebuffer_checksum = miga80_source_view_checksum(
         pixels, stride * MIGA80_SOURCE_VIEW_HEIGHT);
     return MIGA80_SOURCE_VIEW_OK;
+}
+
+enum {
+    PLANAR_COLOR_BACKGROUND = 0,
+    PLANAR_COLOR_ACCENT = 1,
+    PLANAR_COLOR_SOURCE_TEXT = 2,
+    PLANAR_COLOR_BRIGHT_TEXT = 3
+};
+
+static void planar_fill_text_row(uint8_t *color_bit_0, uint8_t *color_bit_1,
+                                 size_t bytes_per_row, size_t row,
+                                 uint8_t color)
+{
+    const size_t first_y = row * MIGA80_FONT4X8_HEIGHT;
+    const int bit_0 = (color & 1U) != 0U;
+    const int bit_1 = (color & 2U) != 0U;
+    size_t y;
+
+    for (y = first_y; y < first_y + MIGA80_FONT4X8_HEIGHT; ++y) {
+        (void)memset(color_bit_0 + y * bytes_per_row,
+                     bit_0 ? 0xff : 0x00,
+                     MIGA80_SOURCE_VIEW_PLANAR_BYTES_PER_ROW);
+        (void)memset(color_bit_1 + y * bytes_per_row,
+                     bit_1 ? 0xff : 0x00,
+                     MIGA80_SOURCE_VIEW_PLANAR_BYTES_PER_ROW);
+    }
+}
+
+static void planar_write_nibble(uint8_t *plane, size_t bytes_per_row,
+                                size_t column, size_t y, uint8_t bits)
+{
+    const size_t byte = column >> 1U;
+    const unsigned int shift = (column & 1U) == 0U ? 4U : 0U;
+    const uint8_t mask = (uint8_t)(0x0fU << shift);
+    uint8_t *destination = plane + y * bytes_per_row + byte;
+
+    *destination = (uint8_t)((*destination & (uint8_t)~mask) |
+                             ((bits & 0x0fU) << shift));
+}
+
+static uint8_t planar_read_nibble(const uint8_t *plane, size_t bytes_per_row,
+                                  size_t column, size_t y)
+{
+    const unsigned int shift = (column & 1U) == 0U ? 4U : 0U;
+
+    return (uint8_t)((plane[y * bytes_per_row + (column >> 1U)] >> shift) &
+                     0x0fU);
+}
+
+static void planar_fill_cell(uint8_t *color_bit_0, uint8_t *color_bit_1,
+                             size_t bytes_per_row, size_t column, size_t row,
+                             uint8_t color)
+{
+    const uint8_t bit_0 = (color & 1U) != 0U ? 0x0fU : 0U;
+    const uint8_t bit_1 = (color & 2U) != 0U ? 0x0fU : 0U;
+    const size_t first_y = row * MIGA80_FONT4X8_HEIGHT;
+    size_t glyph_y;
+
+    for (glyph_y = 0U; glyph_y < MIGA80_FONT4X8_HEIGHT; ++glyph_y) {
+        planar_write_nibble(color_bit_0, bytes_per_row, column,
+                            first_y + glyph_y, bit_0);
+        planar_write_nibble(color_bit_1, bytes_per_row, column,
+                            first_y + glyph_y, bit_1);
+    }
+}
+
+static void planar_draw_character(uint8_t *color_bit_0, uint8_t *color_bit_1,
+                                  size_t bytes_per_row, size_t column,
+                                  size_t row, unsigned char character,
+                                  uint8_t color)
+{
+    const uint8_t *glyph = glyph_for(character);
+    const uint8_t bit_0 = (color & 1U) != 0U ? 0x0fU : 0U;
+    const uint8_t bit_1 = (color & 2U) != 0U ? 0x0fU : 0U;
+    const size_t first_y = row * MIGA80_FONT4X8_HEIGHT;
+    size_t glyph_y;
+
+    for (glyph_y = 0U; glyph_y < MIGA80_FONT4X8_HEIGHT; ++glyph_y) {
+        const uint8_t set = glyph[glyph_y] & 0x0fU;
+        uint8_t current;
+
+        current = planar_read_nibble(color_bit_0, bytes_per_row, column,
+                                     first_y + glyph_y);
+        planar_write_nibble(color_bit_0, bytes_per_row, column,
+                            first_y + glyph_y,
+                            (uint8_t)((current & (uint8_t)~set) |
+                                      (bit_0 & set)));
+        current = planar_read_nibble(color_bit_1, bytes_per_row, column,
+                                     first_y + glyph_y);
+        planar_write_nibble(color_bit_1, bytes_per_row, column,
+                            first_y + glyph_y,
+                            (uint8_t)((current & (uint8_t)~set) |
+                                      (bit_1 & set)));
+    }
+}
+
+static void planar_draw_text(uint8_t *color_bit_0, uint8_t *color_bit_1,
+                             size_t bytes_per_row, size_t row,
+                             const char *text, uint8_t color)
+{
+    size_t column = 0U;
+
+    while (column < MIGA80_SOURCE_VIEW_COLUMNS && text[column] != '\0') {
+        planar_draw_character(color_bit_0, color_bit_1, bytes_per_row,
+                              column, row, (unsigned char)text[column], color);
+        ++column;
+    }
+}
+
+static size_t planar_line_offset(const char *source, size_t source_size,
+                                 size_t wanted_line, int *found)
+{
+    size_t offset = 0U, line = 0U;
+
+    while (line < wanted_line && offset < source_size) {
+        if (source[offset++] == '\n') { ++line; }
+    }
+    *found = line == wanted_line;
+    return offset;
+}
+
+static void planar_render_source_row(
+    uint8_t *color_bit_0, uint8_t *color_bit_1, size_t bytes_per_row,
+    const char *source, size_t source_size, size_t cursor, size_t anchor,
+    size_t offset, int found, size_t first_column, size_t screen_row,
+    size_t *next_offset, int *next_found)
+{
+    const size_t selection_start =
+        anchor == (size_t)-1 || anchor == cursor
+            ? cursor : anchor < cursor ? anchor : cursor;
+    const size_t selection_end =
+        anchor == (size_t)-1 || anchor == cursor
+            ? cursor : anchor > cursor ? anchor : cursor;
+    size_t column = 0U;
+
+    planar_fill_text_row(color_bit_0, color_bit_1, bytes_per_row, screen_row,
+                         PLANAR_COLOR_BACKGROUND);
+    if (!found) {
+        *next_offset = offset;
+        *next_found = 0;
+        return;
+    }
+    for (;;) {
+        const int at_end = offset == source_size;
+        const int at_newline = !at_end && source[offset] == '\n';
+        const int selected = offset >= selection_start &&
+                             offset < selection_end;
+        size_t width = 1U, cell;
+
+        if (at_end || at_newline) {
+            if (column >= first_column &&
+                column < first_column + MIGA80_SOURCE_VIEW_COLUMNS &&
+                (cursor == offset || selected)) {
+                planar_fill_cell(color_bit_0, color_bit_1, bytes_per_row,
+                                 column - first_column, screen_row,
+                                 PLANAR_COLOR_ACCENT);
+            }
+            break;
+        }
+        if (source[offset] == '\t') {
+            width = 4U - (column % 4U);
+        }
+        for (cell = 0U; cell < width; ++cell) {
+            const size_t logical_column = column + cell;
+
+            if (logical_column >= first_column &&
+                logical_column < first_column +
+                                     MIGA80_SOURCE_VIEW_COLUMNS) {
+                const size_t visible = logical_column - first_column;
+                const int cursor_cell = cursor == offset && cell == 0U;
+
+                if (selected || cursor_cell) {
+                    planar_fill_cell(color_bit_0, color_bit_1, bytes_per_row,
+                                     visible, screen_row,
+                                     PLANAR_COLOR_ACCENT);
+                }
+                if (cell == 0U && source[offset] != '\t') {
+                    planar_draw_character(color_bit_0, color_bit_1,
+                        bytes_per_row, visible, screen_row,
+                        (unsigned char)source[offset],
+                        selected || cursor_cell ? PLANAR_COLOR_BRIGHT_TEXT
+                                                : PLANAR_COLOR_SOURCE_TEXT);
+                }
+            }
+        }
+        column += width;
+        ++offset;
+        if (column >= first_column + MIGA80_SOURCE_VIEW_COLUMNS &&
+            cursor < offset && selection_end <= offset) {
+            break;
+        }
+    }
+    while (offset < source_size && source[offset] != '\n') { ++offset; }
+    if (offset < source_size) {
+        *next_offset = offset + 1U;
+        *next_found = 1;
+    } else {
+        *next_offset = offset;
+        *next_found = 0;
+    }
+}
+
+enum Miga80SourceViewStatus miga80_source_view_render_editor_planar_rows(
+    uint8_t *color_bit_0, uint8_t *color_bit_1, size_t bytes_per_row,
+    const char *source, size_t source_size, size_t cursor, size_t anchor,
+    size_t first_line, size_t first_column, const char *title_text,
+    const char *status_text, size_t first_row, size_t row_count)
+{
+    const size_t last_row = first_row + row_count;
+    size_t first_source_row, source_offset = 0U, row;
+    int source_found = 0;
+
+    if (color_bit_0 == NULL || color_bit_1 == NULL || source == NULL ||
+        title_text == NULL || status_text == NULL || cursor > source_size ||
+        (anchor != (size_t)-1 && anchor > source_size) ||
+        first_row > MIGA80_SOURCE_VIEW_ROWS ||
+        row_count > MIGA80_SOURCE_VIEW_ROWS - first_row) {
+        return MIGA80_SOURCE_VIEW_INVALID_ARGUMENT;
+    }
+    if (bytes_per_row < MIGA80_SOURCE_VIEW_PLANAR_BYTES_PER_ROW) {
+        return MIGA80_SOURCE_VIEW_INVALID_STRIDE;
+    }
+    first_source_row = first_row < 1U ? 1U : first_row;
+    if (first_source_row < last_row &&
+        first_source_row < MIGA80_SOURCE_VIEW_ROWS - 1U) {
+        source_offset = planar_line_offset(source, source_size,
+            first_line + first_source_row - 1U, &source_found);
+    }
+    for (row = first_row; row < last_row; ++row) {
+        if (row == 0U) {
+            planar_fill_text_row(color_bit_0, color_bit_1, bytes_per_row,
+                                 row, PLANAR_COLOR_ACCENT);
+            planar_draw_text(color_bit_0, color_bit_1, bytes_per_row, row,
+                             title_text, PLANAR_COLOR_BRIGHT_TEXT);
+        } else if (row == MIGA80_SOURCE_VIEW_ROWS - 1U) {
+            planar_fill_text_row(color_bit_0, color_bit_1, bytes_per_row,
+                                 row, PLANAR_COLOR_ACCENT);
+            planar_draw_text(color_bit_0, color_bit_1, bytes_per_row, row,
+                             status_text, PLANAR_COLOR_BRIGHT_TEXT);
+        } else {
+            planar_render_source_row(color_bit_0, color_bit_1, bytes_per_row,
+                source, source_size, cursor, anchor,
+                source_offset, source_found, first_column, row,
+                &source_offset, &source_found);
+        }
+    }
+    return MIGA80_SOURCE_VIEW_OK;
+}
+
+enum Miga80SourceViewStatus miga80_source_view_render_editor_planar(
+    uint8_t *color_bit_0, uint8_t *color_bit_1, size_t bytes_per_row,
+    const char *source, size_t source_size, size_t cursor, size_t anchor,
+    size_t first_line, size_t first_column, const char *title_text,
+    const char *status_text)
+{
+    return miga80_source_view_render_editor_planar_rows(
+        color_bit_0, color_bit_1, bytes_per_row, source, source_size, cursor,
+        anchor, first_line, first_column, title_text, status_text, 0U,
+        MIGA80_SOURCE_VIEW_ROWS);
 }

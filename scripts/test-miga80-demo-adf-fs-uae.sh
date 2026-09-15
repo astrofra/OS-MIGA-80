@@ -115,6 +115,13 @@ case "$MIGA80_MODE" in
       'MIGA80:MIGA80 MIGA80:DATA/DEFAULT.LUA MIGA80:BOOTED.TXT' \
       >"$MIGA80_TEST_STARTUP"
     ;;
+  BROWSE)
+    # Same boot command as the reference release, except that the ready
+    # report is written back to the test floppy so the harness can observe it.
+    printf '%s\n' \
+      'SYS:MIGA80 SYS:demos/default.lua SYS:BOOTED.TXT BROWSE' \
+      >"$MIGA80_TEST_STARTUP"
+    ;;
   INTROTEST)
     printf '%s\n' \
       'SYS:MIGA80 SYS:demos/default.lua SYS:BOOTED.TXT INTROTEST' \
