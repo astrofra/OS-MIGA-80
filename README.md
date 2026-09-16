@@ -8,11 +8,11 @@ Startup shows the centered project logo with a brief glitch effect and an
 original “A–MI–GA” jingle synthesized on the 68000 and played through Paula.
 ESC skips the intro. See [boot intro and tests](documentation/MIGA-80-boot-intro.md).
 Its graphical selector supports mouse selection, double-click loading, folder
-navigation and pagination. F2 / **OPEN** reopens it, F5 runs the source, ESC
+navigation and pagination. Ctrl+O / **OPEN** reopens it, F5 runs the source, ESC
 stops or returns, and CTRL-Q exits. The source view is now an editable LORES
 viewport: type to edit; use the arrows (with Shift for selection),
 Ctrl+C/Ctrl+X/Ctrl+V for its internal clipboard, Ctrl+S to save, and
-Ctrl+Shift+S for Save As. Documents are limited to 16 KiB; long lines and files
+Shift+Ctrl+S for Save As. Documents are limited to 16 KiB; long lines and files
 scroll rather than being rejected. The planned HIRES editor is not implemented
 yet. Build with `gmake release`; validate with
 `gmake release-fs-uae`. The ADF and payload manifest are kept in `release/`

@@ -241,9 +241,9 @@ Use printable ASCII, LF and tabs; canonicalize CRLF on load. Preserve tab bytes,
 | Ctrl+C | Copy selected bytes; no selection means no action. |
 | Ctrl+X | Copy selected bytes successfully, then delete them. |
 | Ctrl+V | Insert clipboard bytes or replace the selection. |
-| F2 / Open | Load source through the existing browser. |
+| Ctrl+O / Open | Load source through the existing browser. |
 | Ctrl+S | Save to the current filename, or open Save As if unnamed. |
-| Ctrl+Shift+S | Save As: choose directory, enter filename and confirm replacement if needed. |
+| Shift+Ctrl+S | Save As: choose directory, enter filename and confirm replacement if needed. |
 | F5 / Esc | Compile/run; stop or return from the result. Esc in a dialog cancels it. |
 | Ctrl+Q | Quit, with modified-document handling. |
 
@@ -251,7 +251,7 @@ Use a half-open selected range `[min(anchor, cursor), max(anchor, cursor))`. Rev
 
 Capacity checks happen **before** destructive edits: for replacement, check `length - selected_length + inserted_length`. A failed paste preserves text, selection, cursor, clipboard and dirty state. Clipboard contents survive F5/Esc and file loads; system-wide Amiga clipboard interoperability is deferred.
 
-Map text through the current AmigaOS keymap, including Shift/Alt-produced ASCII punctuation used by code. Raw keys remain appropriate for arrows and function keys. Decode Ctrl commands before filtering printable text, and normalize the shortcut's Shift qualifier when distinguishing Ctrl+S from Ctrl+Shift+S. Handle both Shift keys and separate repeatable movement/deletion from one-shot load/run/save actions.
+Map text through the current AmigaOS keymap, including Shift/Alt-produced ASCII punctuation used by code. Raw keys remain appropriate for arrows and function keys. Decode Ctrl commands before filtering printable text, and normalize the shortcut's Shift qualifier when distinguishing Ctrl+S from Shift+Ctrl+S. Handle both Shift keys and separate repeatable movement/deletion from one-shot load/run/save actions.
 
 The present loop copies message fields before `ReplyMsg`; text input also needs the dead-key information referenced by `IAddress`. Translate while the message remains valid, or copy all needed data before replying. `MapRawKey` may return multiple bytes or an overflow error; insert valid text atomically. See the [MapRawKey autodoc](https://developer.amigaos3.net/autodocs/keymap.library/MapRawKey.html).
 

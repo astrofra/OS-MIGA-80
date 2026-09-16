@@ -986,7 +986,7 @@ static void format_interactive_title(char *title, size_t capacity)
                                ? (const char *)FilePart(
                                      (STRPTR)interactive_source_path)
                                : "(untitled)";
-    (void)snprintf(title, capacity, "%-46.46s%c F2 OPEN  F5 RUN",
+    (void)snprintf(title, capacity, "%-42.42s%c CTRL-O OPEN  F5 RUN",
                    filename,
                    interactive_document != NULL && interactive_document->dirty
                        ? '*' : ' ');
@@ -1877,7 +1877,7 @@ static int ui_source_status(struct demo_ui *ui, struct Screen *screen,
 static int ui_source(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
 {
     return ui_source_status(ui, screen, chunky,
-        "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN");
+        "CTRL-S SAVE  SHIFT-CTRL-S SAVE AS  CTRL-O OPEN  F5 RUN");
 }
 
 static int ui_picker(struct demo_ui *ui, struct Screen *screen, uint8_t *chunky)
@@ -2237,7 +2237,8 @@ static int ui_editor_event(struct demo_ui *ui, struct Screen *screen,
     const enum Miga80EditorCommand command = miga80_editor_decode_key(
         code, key_qualifiers, translated, translated_length);
     enum Miga80EditorStatus edit_status = MIGA80_EDITOR_OK;
-    const char *status = "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN";
+    const char *status =
+        "CTRL-S SAVE  SHIFT-CTRL-S SAVE AS  CTRL-O OPEN  F5 RUN";
     size_t selection_start, selection_end;
     int source_edit = 0, multiline_edit = 0;
 
@@ -2515,7 +2516,7 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     ULONG baseline = 0U;
     const ULONG signals = FindTask(NULL)->tc_SigAlloc;
     const char *bad[] = {"Broken.lua", "Huge.lua", "Gone.lua"};
-    const char ctrl_c = 3, ctrl_q = 17, ctrl_s = 19;
+    const char ctrl_c = 3, ctrl_o = 15, ctrl_q = 17, ctrl_s = 19;
     (void)memset(&ui, 0, sizeof(ui));
     miga80_file_picker_init(&ui.picker);
     ui.metrics = *metrics;
@@ -2555,7 +2556,8 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
         ui.metrics.source_checksum != metrics->source_checksum && verify_source_view(screen, chunky));
     /* Every shipped demo loads through the real dispatcher; loading never runs it. */
     for (i = 0; i < 6; ++i) {
-        BROWSER_CHECK("f2_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
+        BROWSER_CHECK("ctrl_o_reopen", EDITOR_KEY(0U, IEQUALIFIER_CONTROL,
+            &ctrl_o, 1U) == 0 && ui.browsing);
         BROWSER_CHECK("single_select", BROWSER_CLICK(40, (WORD)(44 + i * 16), 20U + (ULONG)i, 0U) == 0 && ui.browsing);
         BROWSER_CHECK("return_or_open_load",
             (i == 0 ? BROWSER_CLICK(140, 235, 25U, 0U) : BROWSER_KEY(0x44U)) == 0 &&
@@ -2589,7 +2591,8 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
     BROWSER_CHECK("long_line_loads", BROWSER_KEY(0x44U) == 0 && !ui.browsing &&
         ui.metrics.maximum_columns == 65U &&
         strcmp(ui.source_path, "SYS:picker-test/Long.lua") == 0);
-    BROWSER_CHECK("long_line_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
+    BROWSER_CHECK("long_line_reopen", EDITOR_KEY(0U, IEQUALIFIER_CONTROL,
+        &ctrl_o, 1U) == 0 && ui.browsing);
     ui.picker.selected = browser_find(&ui, "Rows.lua");
     BROWSER_CHECK("many_rows_load", BROWSER_KEY(0x44U) == 0 && !ui.browsing &&
         ui.metrics.source_lines == 31U &&
@@ -2612,7 +2615,8 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
         editor_document.first_visible_line == 0U &&
         editor_planar_row_checksum(screen, 2U) == scroll_row_checksum &&
         verify_source_view(screen, chunky));
-    BROWSER_CHECK("many_rows_reopen", BROWSER_KEY(0x51U) == 0 && ui.browsing);
+    BROWSER_CHECK("many_rows_reopen", EDITOR_KEY(0U, IEQUALIFIER_CONTROL,
+        &ctrl_o, 1U) == 0 && ui.browsing);
     BROWSER_CHECK("scan_failure_preserves_directory",
         !miga80_file_picker_scan(&ui.picker, "SYS:missing-directory") &&
         strcmp(ui.picker.path, "SYS:picker-test") == 0 && ui.picker.count == 19);
@@ -2667,11 +2671,11 @@ static int run_browser_regression(struct Screen *screen, uint8_t *chunky,
         EDITOR_KEY(0U, IEQUALIFIER_CONTROL, "\026", 1U) == 0 &&
         strcmp(editor_document.text, "abc\ndef") == 0);
     BROWSER_CHECK("dirty_open_cancel",
-        EDITOR_KEY(0x51U, 0U, NULL, 0U) == 0 &&
+        EDITOR_KEY(0U, IEQUALIFIER_CONTROL, &ctrl_o, 1U) == 0 &&
         ui.mode == DEMO_UI_UNSAVED &&
         EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
         ui.mode == DEMO_UI_SOURCE && editor_document.dirty &&
-        EDITOR_KEY(0x51U, 0U, NULL, 0U) == 0 &&
+        EDITOR_KEY(0U, IEQUALIFIER_CONTROL, &ctrl_o, 1U) == 0 &&
         EDITOR_KEY(0U, 0U, "d", 1U) == 0 && ui.mode == DEMO_UI_OPEN &&
         EDITOR_KEY(DEMO_RAWKEY_ESCAPE, 0U, NULL, 0U) == 0 &&
         ui.mode == DEMO_UI_SOURCE && editor_document.dirty);
@@ -2731,7 +2735,7 @@ static int write_browser_report(const char *path, int passed)
         (passed ? write_text(output,
             "sys_demos_scan_sort=pass\nmouse_select_double_click=pass\n"
             "all_six_demos_load=pass\nloaded_source_f5=pass\nresult_escape=pass\n"
-            "f2_mouse_reopen=pass\nfolders_filter_pagination=pass\n"
+            "ctrl_o_mouse_reopen=pass\nfolders_filter_pagination=pass\n"
             "invalid_missing_large_preserve_source=pass\nempty_directory=pass\n"
             "long_lines_many_rows_load=pass\n"
             "parent_sys_root=pass\ncancel_preserves_source=pass\n"
@@ -3531,7 +3535,8 @@ int main(int argc, char **argv)
             miga80_source_view_render_editor(chunky, DEMO_SCREEN_WIDTH,
                 source_buffer, source_size, 0U, MIGA80_EDITOR_NO_ANCHOR,
                 0U, 0U, "MIGA-80 / LUA SOURCE",
-                "EDIT - CTRL-S SAVE - F2 OPEN - F5 RUN", &metrics) !=
+                "CTRL-S SAVE  SHIFT-CTRL-S SAVE AS  CTRL-O OPEN  F5 RUN",
+                &metrics) !=
                     MIGA80_SOURCE_VIEW_OK) {
             failure = "render_source_view";
             goto cleanup;

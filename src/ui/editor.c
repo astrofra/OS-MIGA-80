@@ -13,7 +13,6 @@ enum {
     EDITOR_RAWKEY_DOWN = 0x4dU,
     EDITOR_RAWKEY_RIGHT = 0x4eU,
     EDITOR_RAWKEY_LEFT = 0x4fU,
-    EDITOR_RAWKEY_F2 = 0x51U,
     EDITOR_RAWKEY_F5 = 0x54U,
     EDITOR_RAWKEY_RELEASE = 0x80U,
     EDITOR_TAB_COLUMNS = 4U
@@ -469,6 +468,8 @@ enum Miga80EditorCommand miga80_editor_decode_key(
             command = MIGA80_EDITOR_COMMAND_CUT;
         } else if (command_character(translated, translated_length, 22)) {
             command = MIGA80_EDITOR_COMMAND_PASTE;
+        } else if (command_character(translated, translated_length, 15)) {
+            command = MIGA80_EDITOR_COMMAND_OPEN;
         } else if (command_character(translated, translated_length, 19)) {
             command = (qualifiers & MIGA80_EDITOR_KEY_SHIFT) != 0U
                           ? MIGA80_EDITOR_COMMAND_SAVE_AS
@@ -476,8 +477,6 @@ enum Miga80EditorCommand miga80_editor_decode_key(
         } else if (command_character(translated, translated_length, 17)) {
             command = MIGA80_EDITOR_COMMAND_QUIT;
         }
-    } else if (raw_code == EDITOR_RAWKEY_F2) {
-        command = MIGA80_EDITOR_COMMAND_OPEN;
     } else if (raw_code == EDITOR_RAWKEY_F5) {
         command = MIGA80_EDITOR_COMMAND_RUN;
     } else if (raw_code == EDITOR_RAWKEY_ESCAPE) {

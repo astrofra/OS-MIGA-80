@@ -11,7 +11,7 @@ build without changing a hardcoded GUI catalog.
 The boot script uses `SYS:` and opens the selector immediately. A single click
 selects, a double-click loads, and Return / OPEN also loads. Loading only
 changes the read-only source view; F5 remains the explicit compile/run action.
-F2 and the source header's OPEN button reopen the last directory. ESC / CANCEL
+Ctrl+O and the source header's OPEN button reopen the last directory. ESC / CANCEL
 preserves the previous source, ESC also returns from results and stops native
 execution, and CTRL-Q exits. The browser supports folder navigation, SYS:,
 parent, refresh, twelve entries per page, mouse page buttons and Up/Down.
@@ -64,13 +64,13 @@ RAM. Temporary fixtures exercise filtering, nested/empty folders, multiple
 pages, missing files, oversized sources and malformed source text. The target
 regression uses the same input dispatcher as real IDCMP, including real DOS
 scanning and Intuition double-click timing. It checks all six demo loads,
-single-click isolation, different-row click isolation, F2 and mouse reopening,
+single-click isolation, different-row click isolation, Ctrl+O and mouse reopening,
 F5 execution of the loaded layers demo, ESC return, cancellation, CTRL-Q,
 readback, repeated scans without memory growth, and hosted cleanup.
 The report is `build/reports/release-browser-fs-uae.txt`.
 The general `gmake check` suite also passes. A separate normal-boot check
 opened `cube.lua` from the selector using keyboard input, ran it to completion
-with F5, then returned to the source with ESC and to the selector with F2.
+with F5, then returned to the source with ESC and to the selector with Ctrl+O.
 Mouse selection/double-click are exercised by the shared-dispatch target
 regression.
 

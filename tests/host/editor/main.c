@@ -25,7 +25,7 @@ int main(void)
     char normalized[65];
     struct Miga80EditorDocument document;
     size_t length, start, end, line, column;
-    const char ctrl_c = 3, ctrl_q = 17, ctrl_s = 19;
+    const char ctrl_c = 3, ctrl_o = 15, ctrl_q = 17, ctrl_s = 19;
 
     CHECK(miga80_editor_init(&document, text, 64U, strlen(text),
                              clipboard, 64U));
@@ -132,6 +132,9 @@ int main(void)
     CHECK(miga80_editor_decode_key(0U, MIGA80_EDITOR_KEY_CONTROL,
                                    &ctrl_q, 1U) ==
           MIGA80_EDITOR_COMMAND_QUIT);
+    CHECK(miga80_editor_decode_key(0U, MIGA80_EDITOR_KEY_CONTROL,
+                                   &ctrl_o, 1U) ==
+          MIGA80_EDITOR_COMMAND_OPEN);
     CHECK(miga80_editor_decode_key(0U,
           MIGA80_EDITOR_KEY_CONTROL | MIGA80_EDITOR_KEY_SHIFT,
           &ctrl_s, 1U) == MIGA80_EDITOR_COMMAND_SAVE_AS);
@@ -141,8 +144,13 @@ int main(void)
     CHECK(miga80_editor_decode_key(0x44U, MIGA80_EDITOR_KEY_REPEAT,
                                    NULL, 0U) ==
           MIGA80_EDITOR_COMMAND_ENTER);
-    CHECK(miga80_editor_decode_key(0x51U, MIGA80_EDITOR_KEY_REPEAT,
+    CHECK(miga80_editor_decode_key(0x51U, 0U,
                                    NULL, 0U) ==
+          MIGA80_EDITOR_COMMAND_NONE);
+    CHECK(miga80_editor_decode_key(0U,
+                                   MIGA80_EDITOR_KEY_CONTROL |
+                                       MIGA80_EDITOR_KEY_REPEAT,
+                                   &ctrl_o, 1U) ==
           MIGA80_EDITOR_COMMAND_NONE);
     CHECK(miga80_editor_decode_key(0x80U, 0U, "x", 1U) ==
           MIGA80_EDITOR_COMMAND_NONE);

@@ -1407,7 +1407,7 @@ replay, readback and cleanup for all three backends. See the
 
 A versioned reference development-preview ADF now lives in `release/`.
 It packages all six Lua demos in `SYS:demos` and boots into a graphical
-filesystem selector: mouse selection/double-click load, F2 reopening, folders,
+filesystem selector: mouse selection/double-click load, Ctrl+O reopening, folders,
 pagination, cancellation and transactional source validation. The source view
 remains read-only (30 lines, 64 columns); this is not the full Phase 1 shell or
 editor. A centered glitch logo and a procedural three-chord Paula jingle now precede

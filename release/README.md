@@ -5,7 +5,7 @@
 It shows the centered logo with a 3.2-second glitch intro and a procedural
 “A–MI–GA” jingle, then opens the graphical file selector at `SYS:demos`.
 The intro runs once per application launch, before the file workflow appears;
-F2, F5 and returns to the source do not replay it.
+Ctrl+O, F5 and returns to the source do not replay it.
 ESC or a left click skips the intro; CTRL-Q exits.
 
 - `default.lua`: Mandelbrot fractal.
@@ -20,10 +20,10 @@ ptplayer replayer. Playback stops on completion or ESC. See the
 [Lua music API](../documentation/MIGA-80-mod-playback.md).
 
 Click to select; double-click to load. F5 runs the displayed source. ESC stops
-execution or returns to the source. F2 or **OPEN** reopens the selector.
+execution or returns to the source. Ctrl+O or **OPEN** reopens the selector.
 The LORES source view is editable: arrows move, Shift+arrows select,
 Ctrl+C/Ctrl+X/Ctrl+V use the internal clipboard, Ctrl+S saves, and
-Ctrl+Shift+S opens Save As. CTRL-Q exits with unsaved-change protection.
+Shift+Ctrl+S opens Save As. CTRL-Q exits with unsaved-change protection.
 Documents are limited to 16 KiB and scroll beyond the 64 × 30 viewport. The
 planned HIRES editor is not included yet. See the disk's `README.TXT` for
 navigation, file-safety behavior, runtime details and current source limits.

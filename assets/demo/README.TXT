@@ -40,8 +40,8 @@ MIGA-80 clipboard. Typed Tab inserts spaces to the next four-column stop;
 loaded tab bytes are preserved and displayed at the same stops. The current
 line and column appear in the footer. Long lines and files scroll.
 
-F2 or the top OPEN button reopens the selector. CTRL-S saves to the current
-file; CTRL-SHIFT-S opens Save As. Save As accepts a filename of 1 to 30
+CTRL-O or the top OPEN button reopens the selector. CTRL-S saves to the current
+file; SHIFT-CTRL-S opens Save As. Save As accepts a filename of 1 to 30
 characters and lets you navigate to another directory or disk. Existing files
 require confirmation. Modified documents offer Save / Discard / Cancel before
 Open or CTRL-Q. Failed or cancelled file operations preserve the live source.

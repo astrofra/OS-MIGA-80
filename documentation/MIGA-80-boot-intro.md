@@ -2,7 +2,7 @@
 
 Normal MIGA-80 startup presents `works/logo.png`, then opens the source view or
 `SYS:demos` selector. The intro is called once in startup, before any source or
-selector framebuffer is published. File loading, F2, F5 and ESC returns never
+selector framebuffer is published. File loading, Ctrl+O, F5 and ESC returns never
 invoke it. The 196 x 43 logo keeps its native pixels and four original
 RGB colors. Its top-left position is (30, 106) on the 256 x 256 display, centered
 to the nearest pixel on both axes. The image is encoded into the executable at
