@@ -162,7 +162,7 @@ The adopted graphics direction is defined in [MIGA-80 Graphics Architecture — 
 | A-16 | Generated 68020 code is exercised locally through a pinned Musashi 68EC020 runner before UAE or hardware integration. | Most compiler and ABI failures can then be reproduced in a sub-second native test without building or launching an Amiga image. | Musashi results establish functional confidence only. A curated corpus SHOULD later run under Moira as an independent oracle, while UAE and real A1200 tests remain mandatory for OS, chipset, cache, and performance behavior. |
 | A-17 | An informal stock-A1200 Chip-RAM write estimate near 6 MB/s is treated as a bandwidth warning, not as an engineering budget. | Its loop, access width, alignment, display/DMA state, and unit convention are unknown, and write-only throughput does not describe C2P's mixed traffic. | Phase 0 MUST reproduce aligned byte/word/long read, write, and mixed-access tests on real hardware with display blanked and active and with representative DMA states. Generated disassembly and raw E-Clock/raster distributions must accompany the result. |
 | A-18 | Available Fast RAM enables an optional transparent acceleration tier, never a different cartridge contract. | Moving CPU code, stacks, game state, dictionaries, chunky sources, and CPU-only scratch out of contended Chip RAM can free 68020 and chipset cycles while AGA and the blitter retain DMA access to Chip RAM. | Phase 0 MUST compare stock and Fast-assisted placement on real hardware. The allocator records every memory domain, all DMA-visible data remains in Chip RAM, and release certification still uses the stock 2 MiB configuration. |
-| A-19 | The eleven complete 4,096-entry color-response tables MUST NOT be compiled as literal arrays into the MIGA-80 executable. | RGB24 storage alone would consume 135,168 bytes (132 KiB), or 180,224 bytes (176 KiB) as runtime-aligned 32-bit entries, before executable-format or alignment overhead. This is disproportionate to the floppy and binary budgets. | Phase 0 compares two integer-only sources for the selected 16 KiB direct-index table: independently compressed canonical LUT blocks, or one-time reconstruction from compact fixed-point profile descriptors. Neither route may perform color calculations after takeover. |
+| A-19 | The twelve complete 4,096-entry color-response tables MUST NOT be compiled as literal arrays into the MIGA-80 executable. | RGB24 storage alone would consume 147,456 bytes (144 KiB), or 196,608 bytes (192 KiB) as runtime-aligned 32-bit entries, before executable-format or alignment overhead. This is disproportionate to the floppy and binary budgets. | Phase 0 compares two integer-only sources for the selected 16 KiB direct-index table: independently compressed canonical LUT blocks, or one-time reconstruction from compact fixed-point profile descriptors. Neither route may perform color calculations after takeover. |
 
 ## 6. Target platform and compatibility contract
 
@@ -359,7 +359,7 @@ The MIGA-80 UI SHOULD use the same 256 × 256 logical surface as cartridges so t
 | SPR-008 | Sprite and tile sheets MUST use the same packed asset representation consumed by the runtime or lossless, deterministic build-time transformations into planar, attached-sprite, and fallback caches. |
 | SPR-009 | The editor MUST prevent a planar/overlay asset-role or palette mismatch from silently changing pixel indices. |
 | SPR-010 | The editor MUST present virtual objects and tiles, not physical AGA channels. It MAY report whether an asset is eligible for direct, attached, multiplexed, or fallback rendering, but channel assignment remains a runtime concern. |
-| SPR-011 | The palette editor MUST offer the eleven response profiles defined in section 11.4.1—five photographic, three historical-video, two color-vision, and one console-inspired—preview them through the same lookup table used by the runtime, and identify the selected profile and version. |
+| SPR-011 | The palette editor MUST offer the neutral response and the eleven creative or diagnostic response profiles defined in section 11.4.1, preview them through the same lookup table used by the runtime, and identify the selected profile key and version. |
 | SPR-012 | Changing a response profile MUST preserve every stored 12-bit logical color and pixel index; only the deterministic 24-bit AGA rendering changes. |
 
 ### 9.4 ProTracker import and playback
@@ -749,7 +749,7 @@ The 1.0 API MUST cover:
 
 - lifecycle and timing: `frame`, `ticks`, and cartridge rate metadata;
 - input: `btn`, `btn_pressed`, keyboard key state where supported;
-- graphics state: `layer`, `camera`, `layer_scroll`, `clip`, `palette`, `transparent`, and cartridge-level chunky viewport metadata;
+- graphics state: `layer`, `camera`, `layer_scroll`, `clip`, `palette`, `color_response`, `transparent`, and cartridge-level chunky viewport metadata;
 - pixels and primitives: `clear`, `pixel`, `line`, `rect`, `rect_fill`, `circle`, `circle_fill`;
 - planar assets: `tile`, `tile_region`, and `map_draw`;
 - virtual objects: `object_set`, `object_hide`, `object_clear`, and bounded status/profiling queries;
@@ -847,23 +847,60 @@ logical 0xRGB (12-bit) -> profile LUT[4096] -> hardware 0xRRGGBB (24-bit AGA)
 
 Consequently, a predefined MIGA-80 gamut may draw each of its 4,096 entries from anywhere in AGA's approximately 16.7-million-color space while the cartridge still sees only 4,096 possible colors. Only the 31 opaque colors selected by the current dual-playfield palette are resident simultaneously; the lookup table does not change that display limit. Different logical colors MAY converge after quantization or by design, most notably in the monochrome profile.
 
-Version 1.0 MUST provide exactly five photographic-stock profiles, three historical-video profiles, two common color-vision-deficiency simulations, and one console-inspired profile:
+Version 1.0 MUST provide the neutral RGB12 response plus exactly five
+photographic-stock profiles, three historical-video profiles, two common
+color-vision-deficiency simulations, and one console-inspired profile. MIGA Lua
+selects one with the declarative intrinsic:
 
-| Profile family | Version 1.0 response target | Reference year |
-| --- | --- | ---: |
-| Photographic negative | Kodak Professional PORTRA 400 | 2010 |
-| Photographic reversal | Kodak Professional EKTACHROME E100 | 2018 |
-| Instant film | Polaroid Color 600 | 1981 |
-| Photographic negative | Lomography LomoChrome Metropolis | 2019 |
-| Panchromatic monochrome | ILFORD HP5 PLUS | 1989 |
-| Historical video | NTSC 1953 colorimetry | 1953 |
-| Historical video | 625-line PAL/SECAM colorimetry | 1967 |
-| Historical Soviet video | OSKM (ОСКМ, «Одновременная совместимая система с квадратурной модуляцией»), the experimental Soviet 625/50 quadrature system used before SECAM adoption | 1960 |
-| Color vision | Deutan red–green deficiency simulation, Machado model | 2009 |
-| Color vision | Protan red–green deficiency simulation, Machado model | 2009 |
-| Console-inspired | Mega Drive soft quantization with a midtone-only violet bias | 1988 |
+```lua
+color_response(RESPONSE_WARM_NEGATIVE)
+```
 
-The stock and console names are response targets, not claims of manufacturer endorsement or exact chemical or hardware reproduction; public preset naming remains subject to trademark review. The profile is selected per cartridge and applies uniformly to editor preview, reference rendering, hardware sprites, planar fallback, and exclusive runtime output. Copper palette changes are not part of the base cartridge API.
+The argument MUST be one of the literal symbols below. It is not an integer,
+string, table ordinal, native address or user-supplied LUT. Omitting the call
+selects `RESPONSE_NEUTRAL`. A source unit may contain at most one effective
+selection, at a statically single-execution initialization site; a dynamic,
+conditional or repeated selection is a compile-time error. The compiler records
+the corresponding stable profile identifier and version in cartridge metadata,
+and the host validates or constructs the selected LUT before native execution.
+`color_response` therefore declares cartridge rendering policy; it is not a
+game-time palette effect and cannot change during exclusive takeover.
+
+| Stable MIGA Lua key | Profile family | Version 1.0 response target | Reference year |
+| --- | --- | --- | ---: |
+| `RESPONSE_NEUTRAL` | Reference | Amiga RGB12 nibble replication | 1985 |
+| `RESPONSE_WARM_NEGATIVE` | Photographic negative | Kodak Professional PORTRA 400 study | 2010 |
+| `RESPONSE_COOL_REVERSAL` | Photographic reversal | Kodak Professional EKTACHROME E100 study | 2018 |
+| `RESPONSE_INSTANT_600` | Instant film | Polaroid Color 600 study | 1981 |
+| `RESPONSE_MUTED_METROPOLIS` | Photographic negative | Lomography LomoChrome Metropolis study | 2019 |
+| `RESPONSE_PANCHRO_MONO` | Panchromatic monochrome | ILFORD HP5 PLUS study | 1989 |
+| `RESPONSE_NTSC_1953` | Historical video | NTSC 1953 colorimetry | 1953 |
+| `RESPONSE_PAL_SECAM_625` | Historical video | 625-line PAL/SECAM colorimetry | 1967 |
+| `RESPONSE_OSKM_1960` | Historical Soviet video | OSKM (ОСКМ), the experimental Soviet 625/50 quadrature system used before SECAM adoption | 1960 |
+| `RESPONSE_DEUTAN_2009` | Color-vision review | Deutan red–green deficiency simulation, Machado model | 2009 |
+| `RESPONSE_PROTAN_2009` | Color-vision review | Protan red–green deficiency simulation, Machado model | 2009 |
+| `RESPONSE_VIOLET_DRIVE` | Console-inspired | Mega Drive soft quantization with a midtone-only violet bias | 1988 |
+
+These symbolic keys are the source-level ABI and MUST retain their meanings.
+Their table order, display names and internal numeric IDs are not API. The
+brand-bearing response targets document provenance; user-facing preset names
+MAY use the brand-neutral wording encoded in the keys. The deutan and protan
+keys are primarily editor review modes, but remain deterministic selectable
+responses so captures and diagnostic cartridges can reproduce the preview
+exactly.
+
+The stock and console names are response targets, not claims of manufacturer endorsement or exact chemical or hardware reproduction; public preset naming remains subject to trademark review. The profile is selected per cartridge and applies uniformly to editor preview, reference rendering, hardware sprites, planar fallback, and exclusive runtime output.
+
+`palette_set`, whole-palette selection and future raster-palette commands always
+accept logical RGB12. They resolve changed entries through the selected response
+LUT before preparing AGA register values. The ordinary palette path caches all
+31 visible RGB24 values and publishes changed entries atomically with the next
+frame. A future Copper path MUST resolve colors while constructing a bounded,
+double-buffered list; the Copper never performs LUT lookups. Because one full
+RGB24 AGA color requires high- and low-nibble register writes, intensive raster
+palette effects are primarily limited by Copper-list size, sequential register
+writes and Chip-RAM DMA contention, not by the response lookup. Raw Copper
+instructions remain outside the base cartridge API.
 
 The generator MUST model color in linear light before final display encoding and 8-bit quantization. For each film stock it SHOULD use published spectral-sensitivity, characteristic, and dye-density data where available, supplemented by a calibrated color-target capture of the named stock, processing chemistry, scan or print path, illuminant, and reference white. For each video profile it MUST use documented primaries, white point, transfer behavior, luma coefficients, and the static color effect of its encode/decode path. OSKM is modeled as a documented historical reconstruction and MUST be labelled as such wherever surviving source data leaves a parameter uncertain.
 
@@ -873,7 +910,7 @@ The deutan and protan modes MUST apply the corresponding full-deficiency endpoin
 
 The Mega Drive mode MUST preserve all 4,096 logical colors as distinct 24-bit results. It pulls each component only part-way—initially 28%—toward the nearest value in the console's 3-bit-per-channel RGB vocabulary; it MUST NOT collapse the gamut to the Mega Drive's 512 hardware colors. A smooth luminance bell then raises red and blue and contracts green in the midtones, with exactly zero violet bias at black and white. This violet cast is an explicit MIGA-80 art-direction choice inspired by the appearance of Mega Drive titles, not a claim that every VDP, encoder, cable, or display had that measured response.
 
-Every shipped LUT MUST record its profile ID and version, source-data provenance, illuminant and white-point assumptions, transform parameters, generator revision, and checksum. Tests MUST cover all 4,096 inputs, deterministic rounding, black/white behavior, neutral-ramp behavior, gamut bounds, representative color-chart patches, editor/runtime identity, and hardware register output. The Mega Drive test additionally asserts 4,096 distinct mapped colors and zero purple bias at both luminance endpoints. Direct nibble replication (`0xRGB -> 0xRRGGBB`) remains a non-creative reference path for diagnostics and differential tests, not one of the eleven selectable profiles.
+Every shipped LUT MUST record its profile ID and version, source-data provenance, illuminant and white-point assumptions, transform parameters, generator revision, and checksum. Tests MUST cover all 4,096 inputs, deterministic rounding, black/white behavior, neutral-ramp behavior, gamut bounds, representative color-chart patches, editor/runtime identity, and hardware register output. The Mega Drive test additionally asserts 4,096 distinct mapped colors and zero purple bias at both luminance endpoints. Direct nibble replication (`0xRGB -> 0xRRGGBB`) is the selectable `RESPONSE_NEUTRAL` path as well as the diagnostic and differential-test reference.
 
 The initial 256-color grids and their reproducible generator are documented in [MIGA-80 Color-Response Palette Studies](./color-response-palettes/README.md).
 
@@ -883,10 +920,10 @@ Floating point MAY be used by the host tooling to fit spectral data, matrices, c
 
 A naive embedded representation is too large:
 
-| Representation | One profile | Eleven profiles |
+| Representation | One profile | Twelve profiles |
 | --- | ---: | ---: |
-| Packed RGB24, three bytes per logical color | 12,288 bytes (12 KiB) | 135,168 bytes (132 KiB) |
-| Aligned `uint32_t`, low 24 bits significant | 16,384 bytes (16 KiB) | 180,224 bytes (176 KiB) |
+| Packed RGB24, three bytes per logical color | 12,288 bytes (12 KiB) | 147,456 bytes (144 KiB) |
+| Aligned `uint32_t`, low 24 bits significant | 16,384 bytes (16 KiB) | 196,608 bytes (192 KiB) |
 
 Phase 0 MUST implement and measure both of these alternatives:
 
@@ -895,11 +932,11 @@ Phase 0 MUST implement and measure both of these alternatives:
 | Precomputed LUT pack | One independently compressed, checksummed RGB24 block per profile | Validate, decompress, and widen the selected block | One aligned 16 KiB table |
 | Dynamic fixed-point generation | Compact matrices, curve tables, gamut parameters, and mode flags | Generate and checksum all 4,096 entries once with integer operations | The identical aligned 16 KiB table |
 
-The precomputed alternative uses a separate, versioned response-pack resource. Its directory records, for every profile, the stable ID and version, compressed offset and length, decoded length, decoded LUT checksum, compression method, and flags. Profile blocks MUST be independently decompressible so selecting one profile never expands all eleven. The packed resource remains part of the mandatory floppy/data budget even though it is not linked into the executable.
+The precomputed alternative uses a separate, versioned response-pack resource. Its directory records, for every profile, the stable ID and version, compressed offset and length, decoded length, decoded LUT checksum, compression method, and flags. Profile blocks MUST be independently decompressible so selecting one profile never expands all twelve. The packed resource remains part of the mandatory floppy/data budget even though it is not linked into the executable.
 
 The dynamic alternative stores only a versioned fixed-point descriptor for each profile. The canonical target arithmetic SHOULD use 16-bit operands and 32-bit accumulators convenient for the 68020: normalized channels initially use Q14 (`0x0000` = 0 and `0x4000` = 1), signed matrix coefficients use Q13 (`0x2000` = 1), and every multiply-accumulate step has explicit rounding and saturation. Small integer curve tables represent nonlinear responses. Gamma, film toe/shoulder, the Mega Drive midtone bell, and any other nonlinear operation MUST use bounded lookup tables or documented fixed-point polynomials; target code MUST NOT call `pow`, trigonometric functions, floating-point conversion, or general division. Shifts, rounding of negative values, saturation order, and intermediate widths MUST be specified bit-for-bit rather than relying on implementation-defined signed shifts or overflow.
 
-Because there are only 4,096 source values, the dynamic generator MAY exhaustively reconstruct the table when a profile is selected. It MUST run in hosted mode into a preallocated destination, remain responsive enough for interactive profile changes, report a controlled error on failure, and produce the canonical profile checksum before the table is accepted. Phase 0 MUST record generation time, peak scratch memory, descriptor size, code size, and checksum equality on a stock 14 MHz 68EC020. The fixed-point representation becomes authoritative only if the host reference generator can execute the same integer path and produce byte-identical output for all eleven profiles.
+Because there are only 4,096 source values, the dynamic generator MAY exhaustively reconstruct the table when a profile is selected. It MUST run in hosted mode into a preallocated destination, remain responsive enough for interactive profile changes, report a controlled error on failure, and produce the canonical profile checksum before the table is accepted. Phase 0 MUST record generation time, peak scratch memory, descriptor size, code size, and checksum equality on a stock 14 MHz 68EC020. The fixed-point representation becomes authoritative only if the host reference generator can execute the same integer path and produce byte-identical output for all twelve profiles.
 
 In hosted mode, MIGA-80 either validates and expands the selected packed block or generates it from the selected fixed-point descriptor. Both routes write into a preallocated, 32-bit-aligned 4,096-entry table whose entries have the form `0x00RRGGBB`, and both use checked integer operations only. At most one full response table need be expanded at a time; an optional second table for before/after editor comparison MUST be charged explicitly to the editor memory budget. Fast RAM is preferred when available, but the stock configuration allocates the table in ordinary CPU-accessible Chip RAM.
 
@@ -1460,7 +1497,7 @@ Deliverables:
 - exact empty-boot and Workbench-launch memory measurements;
 - portable reference compositor for `PLANAR`, positioned `PIXEL`, and `OBJECTS`, including deterministic object fallback;
 - AGA 256 × 256 4+4 dual-playfield display with a native planar base, transparent four-plane overlay, and frozen 31-color playfield mapping;
-- versioned offline color-response LUT generator, provenance manifests, 4,096-entry goldens for all eleven profiles, comparative prototypes for the external compressed-pack decoder and dynamic fixed-point generator, one-profile 16 KiB expansion, byte-identical checksum proof, stock-68020 generation/decode timing and size measurements, link-map proof of no floating-point dependency, and verified 24-bit AGA palette programming;
+- versioned offline color-response LUT generator, provenance manifests, 4,096-entry goldens for all twelve profiles, comparative prototypes for the external compressed-pack decoder and dynamic fixed-point generator, one-profile 16 KiB expansion, byte-identical checksum proof, stock-68020 generation/decode timing and size measurements, link-map proof of no floating-point dependency, and verified 24-bit AGA palette programming;
 - a reproducible graphics benchmark suite covering source construction, draw operations, conversion, safe publication, and checksums;
 - stock-versus-Fast-assisted placement measurements for generated code, runtime stack, packed4 source, and CPU-only scratch, without changing cartridge semantics;
 - reference C and optimized CPU-only, blitter-assisted, and CPU/blitter-hybrid four-plane C2P candidates;
@@ -1593,7 +1630,7 @@ Deliverables:
 - versioned `.m80` container and bounded compression;
 - safe-load and safe-save workflow;
 - source editor with navigation, diagnostics, search, and bounded undo;
-- tile/object/palette editor with required tools, all eleven color-response profile previews, logical/mapped color inspection, hardware-eligibility diagnostics, and reference-composited preview;
+- tile/object/palette editor with required tools, all twelve color-response profile previews, logical/mapped color inspection, hardware-eligibility diagnostics, and reference-composited preview;
 - budget meters and project metadata;
 - integrated compile/run/stop loop preserving editor state;
 - example cartridge graphics and source.
@@ -1750,7 +1787,7 @@ The following decisions must be recorded with measurements or prototypes:
 23. Development assembler/linker and syntax, ELF layout, symbol manifest, flat-image extraction, disassembly normalization, and direct-encoder convergence criteria.
 24. CPU regression metrics, reviewed kernels, comparison policy, and thresholds that cannot be presented as hardware timing.
 25. Fast-assisted allocation policy, fallback behavior, profiler labels, and stock-versus-Fast benchmark results for generated code, stack, chunky source, and CPU-only scratch.
-26. Frozen color-response profile IDs and versions, source-data provenance, calibration targets, illuminant/white-point assumptions, color-vision simulation severity, Mega Drive soft-quantization and midtone-bias parameters, transform and gamut-mapping method, LUT generator revision, trademark-safe public names, golden checksums for all eleven profiles, compressed-pack versus dynamic fixed-point strategy per profile, descriptor Q formats and curve tables, response-pack format and codec where used, startup residency policy, selected-table alignment, target construction path, stock-68020 latency/size results, and no-floating-point link-map gate.
+26. Frozen color-response profile IDs and versions, source-data provenance, calibration targets, illuminant/white-point assumptions, color-vision simulation severity, Mega Drive soft-quantization and midtone-bias parameters, transform and gamut-mapping method, LUT generator revision, trademark-safe public names, golden checksums for all twelve profiles, compressed-pack versus dynamic fixed-point strategy per profile, descriptor Q formats and curve tables, response-pack format and codec where used, startup residency policy, selected-table alignment, target construction path, stock-68020 latency/size results, and no-floating-point link-map gate.
 
 ## 23. Recommended first vertical slice
 

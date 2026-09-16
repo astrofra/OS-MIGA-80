@@ -13,20 +13,20 @@ The full MIGA-80 color space contains 4,096 logical values (`0xRGB`, four bits p
 
 This gives `8 × 8 × 4 = 256` samples distributed regularly through RGB12. Every plate preserves this exact ordering, so corresponding cells can be compared directly.
 
-| Kind | Response target | Reference year | Image |
-| --- | --- | ---: | --- |
-| Source | Amiga RGB12, vanilla | 1985 | [`00-amiga-rgb12-vanilla-1985.png`](./00-amiga-rgb12-vanilla-1985.png) |
-| Film | Kodak Professional PORTRA 400 | 2010 | [`01-kodak-portra-400-2010.png`](./01-kodak-portra-400-2010.png) |
-| Film | Kodak Professional EKTACHROME E100 | 2018 | [`02-kodak-ektachrome-e100-2018.png`](./02-kodak-ektachrome-e100-2018.png) |
-| Film | Polaroid Color 600 | 1981 | [`03-polaroid-color-600-1981.png`](./03-polaroid-color-600-1981.png) |
-| Film | Lomography LomoChrome Metropolis | 2019 | [`04-lomochrome-metropolis-2019.png`](./04-lomochrome-metropolis-2019.png) |
-| Film, B&W | ILFORD HP5 PLUS | 1989 | [`05-ilford-hp5-plus-1989.png`](./05-ilford-hp5-plus-1989.png) |
-| Video | NTSC 1953 | 1953 | [`06-ntsc-1953.png`](./06-ntsc-1953.png) |
-| Video | 625-line PAL/SECAM | 1967 | [`07-pal-secam-625-1967.png`](./07-pal-secam-625-1967.png) |
-| Video | Soviet OSKM (ОСКМ) | 1960 | [`08-oskm-1960.png`](./08-oskm-1960.png) |
-| Color vision | Deutan simulation, Machado model | 2009 | [`09-deutan-machado-2009.png`](./09-deutan-machado-2009.png) |
-| Color vision | Protan simulation, Machado model | 2009 | [`10-protan-machado-2009.png`](./10-protan-machado-2009.png) |
-| Console-inspired | Mega Drive midtone-purple response | 1988 | [`11-megadrive-1988.png`](./11-megadrive-1988.png) |
+| Stable `color_response` key | Kind | Response target | Reference year | Image |
+| --- | --- | --- | ---: | --- |
+| `RESPONSE_NEUTRAL` | Source | Amiga RGB12, vanilla | 1985 | [`00-amiga-rgb12-vanilla-1985.png`](./00-amiga-rgb12-vanilla-1985.png) |
+| `RESPONSE_WARM_NEGATIVE` | Film | Kodak Professional PORTRA 400 | 2010 | [`01-kodak-portra-400-2010.png`](./01-kodak-portra-400-2010.png) |
+| `RESPONSE_COOL_REVERSAL` | Film | Kodak Professional EKTACHROME E100 | 2018 | [`02-kodak-ektachrome-e100-2018.png`](./02-kodak-ektachrome-e100-2018.png) |
+| `RESPONSE_INSTANT_600` | Film | Polaroid Color 600 | 1981 | [`03-polaroid-color-600-1981.png`](./03-polaroid-color-600-1981.png) |
+| `RESPONSE_MUTED_METROPOLIS` | Film | Lomography LomoChrome Metropolis | 2019 | [`04-lomochrome-metropolis-2019.png`](./04-lomochrome-metropolis-2019.png) |
+| `RESPONSE_PANCHRO_MONO` | Film, B&W | ILFORD HP5 PLUS | 1989 | [`05-ilford-hp5-plus-1989.png`](./05-ilford-hp5-plus-1989.png) |
+| `RESPONSE_NTSC_1953` | Video | NTSC 1953 | 1953 | [`06-ntsc-1953.png`](./06-ntsc-1953.png) |
+| `RESPONSE_PAL_SECAM_625` | Video | 625-line PAL/SECAM | 1967 | [`07-pal-secam-625-1967.png`](./07-pal-secam-625-1967.png) |
+| `RESPONSE_OSKM_1960` | Video | Soviet OSKM (ОСКМ) | 1960 | [`08-oskm-1960.png`](./08-oskm-1960.png) |
+| `RESPONSE_DEUTAN_2009` | Color vision | Deutan simulation, Machado model | 2009 | [`09-deutan-machado-2009.png`](./09-deutan-machado-2009.png) |
+| `RESPONSE_PROTAN_2009` | Color vision | Protan simulation, Machado model | 2009 | [`10-protan-machado-2009.png`](./10-protan-machado-2009.png) |
+| `RESPONSE_VIOLET_DRIVE` | Console-inspired | Mega Drive midtone-purple response | 1988 | [`11-megadrive-1988.png`](./11-megadrive-1988.png) |
 
 ## Amiga RGB12 — vanilla (1985)
 
@@ -118,7 +118,7 @@ The present film transforms are reproducible visual baselines. A release-quality
 
 ## Target storage and lookup
 
-The floating-point transforms in this generator are strictly host-side build operations. Embedding all eleven tables in the MIGA-80 executable would cost 132 KiB as packed RGB24 or 176 KiB as aligned 32-bit entries, which is too large relative to the binary and floppy budgets.
+The floating-point transforms in this generator are strictly host-side build operations. Embedding all twelve tables in the MIGA-80 executable would cost 144 KiB as packed RGB24 or 192 KiB as aligned 32-bit entries, which is too large relative to the binary and floppy budgets.
 
 Two alternatives must be benchmarked on the stock A1200. The first stores each canonical table as an independently compressed block in an external, versioned response pack. The second stores compact fixed-point descriptors—initially Q14 channels, signed Q13 matrices, and small integer curve tables—and reconstructs all 4,096 entries once when the profile is selected. The fixed-point path is accepted only if its table is byte-identical to the canonical output, has the same checksum, and is fast enough for an interactive profile change.
 
