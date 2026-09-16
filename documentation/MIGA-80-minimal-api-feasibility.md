@@ -343,10 +343,12 @@ never reads the response LUT. Intensive raster effects are dominated by the two
 register writes required for each full RGB24 color, list size, sequential update
 timing and Chip-RAM DMA contention rather than by this indirection.
 
-The current implementation embeds the canonical projections of the built-in
-16-color Workbench Sunset logical palette for all twelve responses. This is a
-small, exact first slice, not yet the general 4,096-entry LUT path required by
-future `palette_set` and `palette_use`.
+The current implementation embeds the canonical projections of a 16-color RGB
+study palette for all twelve responses. Its ordered entries deliberately pass
+through red, yellow, green, cyan, blue and magenta so the demo exposes channel
+and hue changes clearly; the editor's Workbench Sunset palette is restored on
+exit. This is a small, exact first slice, not yet the general 4,096-entry LUT
+path required by future `palette_set` and `palette_use`.
 
 ## Positioned text
 
@@ -363,8 +365,11 @@ return to the original `x` and advance by eight pixels, and drawing clips to the
 all earlier queued drawing.
 
 The executable example is [`assets/demo/color-responses.lua`](../assets/demo/color-responses.lua).
-It places a reversed, ordered-dither ramp in each playfield, changes response
-every three seconds, prints the active response name and runs until ESC.
+It draws one square two-dimensional color field: a dithered X-axis hue ramp in
+`PLANAR` and a complementary Y-axis ramp in `PIXEL`. A one-pixel checker makes
+the two playfields alternate spatially, so both coordinates and both layers
+contribute to the result. It changes response every three seconds, prints the
+active response name and runs until ESC.
 
 ## Off-screen surfaces and blitting
 

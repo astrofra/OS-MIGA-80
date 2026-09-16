@@ -17,6 +17,7 @@
 #include "graphics/c2p4_reference.h"
 #include "graphics/color_response_data.h"
 #include "font4x8_data.h"
+#include "ui/palette.h"
 
 #define DRAW_BATCH_SIZE 16U
 extern struct Device *TimerBase; /* held by the animation owner */
@@ -46,6 +47,7 @@ struct miga80_host_drawing {
     struct Screen *screen;
     const struct miga80_ast_function *ast;
     ULONG response;
+    ULONG planar_dirty;
     struct miga80_draw_text text;
     ULONG palette[2U + 32U * 3U];
 };
@@ -75,6 +77,25 @@ static void publish_color_response(struct miga80_host_drawing *drawing,
     drawing->response = response;
 }
 
+static void restore_editor_palette(struct miga80_host_drawing *drawing)
+{
+    ULONG index;
+
+    if (drawing->screen == NULL) { return; }
+    drawing->palette[0] = 32UL << 16;
+    for (index = 0U; index < 32U; ++index) {
+        const uint16_t rgb12 = miga80_workbench_sunset_rgb12[index & 15U];
+        drawing->palette[1U + index * 3U] =
+            ((ULONG)(rgb12 >> 8) & 0x0fU) * 0x11111111UL;
+        drawing->palette[2U + index * 3U] =
+            ((ULONG)(rgb12 >> 4) & 0x0fU) * 0x11111111UL;
+        drawing->palette[3U + index * 3U] =
+            ((ULONG)rgb12 & 0x0fU) * 0x11111111UL;
+    }
+    drawing->palette[1U + 32U * 3U] = 0U;
+    LoadRGB32(&drawing->screen->ViewPort, drawing->palette);
+}
+
 static const uint8_t *runtime_glyph(unsigned char character)
 {
     if (character < MIGA80_FONT4X8_FIRST ||
@@ -102,6 +123,9 @@ static void draw_runtime_text(struct miga80_host_drawing *drawing,
     bytes = miga80_pool_entry_bytes(&drawing->ast->pool, text->resource);
     if (entry->type != MIGA80_TYPE_STRING || bytes == NULL) {
         return;
+    }
+    if (text->layer == MIGA80_LAYER_PLANAR) {
+        drawing->planar_dirty = 1U;
     }
     for (index = 0U; index < entry->length; ++index) {
         const uint8_t *glyph;
@@ -356,18 +380,23 @@ static void submit_triangle(void *owner, const struct miga80_draw_triangle *tria
     struct draw_command *command = &drawing->commands[drawing->count];
     command->triangle = *triangle;
     command->pixel = 3U;
+    drawing->planar_dirty = 1U;
     command_ready(drawing);
 }
 
 static void submit_line(void *owner, const struct miga80_draw_line *line)
 {
-    submit_command(owner, line, 0U);
+    struct miga80_host_drawing *drawing = owner;
+    drawing->planar_dirty = 1U;
+    submit_command(drawing, line, 0U);
 }
 
 static void submit_pixel(void *owner, uint32_t x, uint32_t y, uint32_t color)
 {
+    struct miga80_host_drawing *drawing = owner;
     const struct miga80_draw_line line = {(int32_t)x, (int32_t)y, 0, 0, color};
-    submit_command(owner, &line, 1U);
+    drawing->planar_dirty = 1U;
+    submit_command(drawing, &line, 1U);
 }
 
 static void set_back_planes(struct miga80_host_drawing *drawing)
@@ -377,6 +406,20 @@ static void set_back_planes(struct miga80_host_drawing *drawing)
     for (plane = 0U; plane < 4U; ++plane) {
         drawing->surface.planes[plane] = bitmap->Planes[plane * 2U + 1U];
     }
+}
+
+static void preserve_planar_frame(struct miga80_host_drawing *drawing)
+{
+    struct BitMap *front;
+    unsigned int plane;
+
+    if (!drawing->planar_dirty) { return; }
+    front = miga80_animation_front(drawing->animation);
+    for (plane = 0U; plane < 4U; ++plane) {
+        CopyMem(front->Planes[plane * 2U + 1U], drawing->surface.planes[plane],
+                MIGA80_DRAW_PLANE_BYTES);
+    }
+    drawing->planar_dirty = 0U;
 }
 
 static int service_drawing(void *data, ULONG signals)
@@ -422,6 +465,7 @@ static int service_drawing(void *data, ULONG signals)
     }
     if (drawing->pending == 3U && miga80_animation_poll(drawing->animation)) {
         set_back_planes(drawing);
+        preserve_planar_frame(drawing);
         drawing->pending = 0U;
     }
     return 1;
@@ -429,8 +473,10 @@ static int service_drawing(void *data, ULONG signals)
 
 static void submit_clear(void *owner, uint32_t color)
 {
+    struct miga80_host_drawing *drawing = owner;
     const struct miga80_draw_line line = {0, 0, 0, 0, color};
-    submit_command(owner, &line, 2U);
+    drawing->planar_dirty = 1U;
+    submit_command(drawing, &line, 2U);
 }
 
 static void submit_flip(void *owner)
@@ -607,7 +653,7 @@ void miga80_host_drawing_destroy(struct miga80_host_drawing *drawing)
 {
     WaitBlit();
     miga80_host_drawing_finish(drawing);
-    publish_color_response(drawing, MIGA80_RESPONSE_NEUTRAL);
+    restore_editor_palette(drawing);
     drawing->pending = 0U;
     if (drawing->request_bit >= 0) {
         (void)SetSignal(0U, 1UL << drawing->request_bit);

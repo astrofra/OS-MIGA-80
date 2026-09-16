@@ -127,8 +127,11 @@ Profiles referenced by a cartridge also receive precomputed projections of the
 31 active opaque palette entries, so `color_response` can switch dynamically by
 publishing a small cache. No matrix, gamma, interpolation, decompression, table
 generation, or floating-point work is permitted after exclusive takeover. The
-current implementation embeds exact projections for its fixed 16-color logical
-palette; general runtime palette editing still requires the full LUT/cache path.
+current implementation embeds exact projections for the demo's fixed 16-color
+RGB study palette; general runtime palette editing still requires the full
+LUT/cache path. The study palette traverses red, yellow, green, cyan, blue and
+magenta to make response differences visible in a compact two-dimensional test
+field.
 The full comparison and hybrid fallback policy are specified in [section
 11.4.2 of the main specification](../MIGA-80-specification-and-roadmap.md#1142-lut-storage-and-integer-only-runtime-contract).
 
