@@ -2,7 +2,7 @@
 
 `assets/demo/cube-solid.lua` et `cube-solid-chunky.lua` montrent le même cube
 pendant dix secondes, avec rotation sur X et Y, projection perspective et
-double buffering. Ils sont inclus dans `SYS:demos` sur `release/miga80.adf`.
+double buffering. Ils sont inclus dans `SYS:demos` sur le fichier ADF versionné de `release/`.
 Le seul changement entre les sources est `layer(PLANAR)` / `layer(PIXEL)`.
 Les anciens cubes wireframe restent disponibles.
 

@@ -2,7 +2,7 @@
 
 Fantasy OS for the Amiga 1200
 
-The reference distribution is [release/miga80.adf](release/miga80.adf), a
+The reference distribution is the versioned `release/miga80-<version>.adf`, a
 bootable development preview containing all six Lua demos in `SYS:demos`.
 Startup shows the centered project logo with a brief glitch effect and an
 original “A–MI–GA” jingle synthesized on the 68000 and played through Paula.

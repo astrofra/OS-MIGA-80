@@ -1,6 +1,6 @@
 MIGA-80 LUA GRAPHICS DEMOS - DEVELOPMENT PREVIEW
 
-Boot release/miga80.adf on a PAL Amiga 1200 with 2 MiB Chip RAM and
+Boot release/miga80-<version>.adf on a PAL Amiga 1200 with 2 MiB Chip RAM and
 Kickstart 3.0 or 3.1. No Fast RAM is required. This reference floppy opens
 the graphical file selector at SYS:demos after a 3.2-second logo intro.
 The centered logo appears and disappears through glitch bands, accompanied
@@ -114,7 +114,7 @@ FS-UAE comparisons are documented in the source repository.
 
 The older source-view and cube autoboot ADFs under build/distribution are
 development/test variants. Their compatibility paths remain DATA/DEFAULT.LUA,
-DATA/LAYERS.LUA and DATA/CUBE.LUA. release/miga80.adf is the reference disk.
+DATA/LAYERS.LUA and DATA/CUBE.LUA. The versioned ADF in release/ is the reference disk.
 
 MOD MUSIC
 

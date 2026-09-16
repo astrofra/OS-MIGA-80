@@ -1405,7 +1405,7 @@ cube comparison reports full-frame C2P timing separately and tests ESC,
 replay, readback and cleanup for all three backends. See the
 [runtime C2P comparison](MIGA-80-c2p-runtime-comparison.md).
 
-A reference development-preview distribution now lives in `release/miga80.adf`.
+A versioned reference development-preview ADF now lives in `release/`.
 It packages all six Lua demos in `SYS:demos` and boots into a graphical
 filesystem selector: mouse selection/double-click load, F2 reopening, folders,
 pagination, cancellation and transactional source validation. The source view

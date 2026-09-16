@@ -1,6 +1,6 @@
 # MIGA-80 reference floppy
 
-[miga80.adf](miga80.adf) is the reference **development preview**, a bootable
+`miga80-<version>.adf` is the reference **development preview**, a bootable
 880 KiB OFS disk for a PAL Amiga 1200, 2 MiB Chip RAM, Kickstart 3.0/3.1.
 It shows the centered logo with a 3.2-second glitch intro and a procedural
 “A–MI–GA” jingle, then opens the graphical file selector at `SYS:demos`.
@@ -28,8 +28,10 @@ Documents are limited to 16 KiB and scroll beyond the 64 × 30 viewport. The
 planned HIRES editor is not included yet. See the disk's `README.TXT` for
 navigation, file-safety behavior, runtime details and current source limits.
 
-The stable filename is intentional: Git records successive reference images.
-`miga80.manifest.json` records the image SHA-256 and every packaged payload.
+The versioned filename prevents emulators from reusing a cached older image.
+The matching versioned manifest records the image SHA-256 and every packaged payload.
+The repository-root `VERSION` file is the single source for both names; changing
+it is enough for the next `gmake release` to create a new pair of artifacts.
 These files belong in version control; `gmake clean` leaves `release/` intact.
 No Kickstart ROM, Workbench files, test fixtures or benchmark reports are included.
 Normal use writes diagnostics to RAM only.

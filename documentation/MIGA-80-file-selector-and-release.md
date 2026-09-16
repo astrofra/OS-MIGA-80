@@ -1,6 +1,6 @@
 # File selector and reference preview
 
-The reference disk is `release/miga80.adf`, a bootable 880 KiB OFS preview.
+The reference disk is `release/miga80-<version>.adf`, a bootable 880 KiB OFS preview.
 `gmake release` packages all `assets/demo/*.lua` into `SYS:demos`; the current
 four are Mandelbrot, both-playfield drawing, the blitter cube and the chunky
 cube. `release/` is intentionally tracked, and `clean` does not remove it.
@@ -53,7 +53,7 @@ remain available. The supervisor and animation buffer ownership are unchanged.
 
 `build-miga80-release.py` builds a temporary image, installs the boot block,
 validates OFS with `xdfscan`, then extracts and compares every payload byte for
-byte before replacing the reference. `miga80.manifest.json` records image and
+byte before replacing the reference. The matching versioned manifest records image and
 payload SHA-256 values, source paths, sizes, and filesystem listing. The disk
 contains project files, the MIT license and the upstream Kalms notice. It
 contains no Kickstart ROM, Workbench files, negative test fixtures or reports.

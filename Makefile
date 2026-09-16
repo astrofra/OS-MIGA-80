@@ -13,6 +13,12 @@ TARGET_RUNTIME := -mcrt=nix20
 HOST_CC ?= cc
 PYTHON ?= python3
 
+MIGA80_VERSION_FILE := VERSION
+MIGA80_VERSION := $(strip $(shell /bin/cat $(MIGA80_VERSION_FILE)))
+ifeq ($(MIGA80_VERSION),)
+$(error $(MIGA80_VERSION_FILE) must contain the MIGA-80 release version)
+endif
+
 PROJECT_CPPFLAGS := -Isrc
 
 AMIGA_BUILD_DIR := build/amiga
@@ -1493,15 +1499,16 @@ build/distribution/miga80-cube-chunky-kalms.adf: $(MIGA80_DEMO_PROGRAM) assets/d
 
 # Reference distribution: all demo assets, a SYS: browser, no benchmark fixtures.
 MIGA80_RELEASE_DEMOS := $(sort $(wildcard assets/demo/*.lua))
-MIGA80_RELEASE_ADF := release/miga80.adf
-MIGA80_RELEASE_MANIFEST := release/miga80.manifest.json
+MIGA80_RELEASE_BASENAME := miga80-$(MIGA80_VERSION)
+MIGA80_RELEASE_ADF := release/$(MIGA80_RELEASE_BASENAME).adf
+MIGA80_RELEASE_MANIFEST := release/$(MIGA80_RELEASE_BASENAME).manifest.json
 .PHONY: release release-fs-uae release-boot-fs-uae
 release: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST) &: $(MIGA80_DEMO_PROGRAM) $(MIGA80_RELEASE_DEMOS) assets/demo \
         $(FONT4X8_GENERATED_BINARY) assets/demo/Startup-Browser $(MIGA80_DEMO_README) \
-        LICENSE third_party/kalms-c2p/readme.txt third_party/ptplayer/LICENSE works/mods/93_10_12_A_SYNTH_1.mod scripts/build-miga80-release.py
+        LICENSE third_party/kalms-c2p/readme.txt third_party/ptplayer/LICENSE works/mods/93_10_12_A_SYNTH_1.mod scripts/build-miga80-release.py $(MIGA80_VERSION_FILE)
 	$(PYTHON) scripts/build-miga80-release.py $(MIGA80_DEMO_PROGRAM) \
-		$(FONT4X8_GENERATED_BINARY) $(MIGA80_RELEASE_ADF)
+		$(FONT4X8_GENERATED_BINARY) $(MIGA80_RELEASE_ADF) $(MIGA80_VERSION)
 
 release-fs-uae: $(MIGA80_RELEASE_ADF) $(MIGA80_RELEASE_MANIFEST)
 	MIGA80_FS_UAE_TIMEOUT_SECONDS=240 $(MIGA80_DEMO_ADF_TESTER) $< \

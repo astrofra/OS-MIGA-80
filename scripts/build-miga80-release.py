@@ -13,9 +13,14 @@ def sha256(path):
 
 
 def main():
-    if len(sys.argv) != 4:
-        raise SystemExit("usage: build-miga80-release.py program font output.adf")
-    program, font, output = map(pathlib.Path, sys.argv[1:])
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: build-miga80-release.py program font output.adf version"
+        )
+    program, font, output = map(pathlib.Path, sys.argv[1:4])
+    version = sys.argv[4]
+    if output.name != f"miga80-{version}.adf":
+        raise SystemExit("Release ADF filename does not match its version")
     demos = sorted(pathlib.Path("assets/demo").glob("*.lua"))
     if not demos:
         raise SystemExit("No Lua demos found")
@@ -58,6 +63,7 @@ def main():
     manifest = {
         "format": "miga80-reference-adf-1",
         "edition": "development preview",
+        "version": version,
         "adf": output.name,
         "adf_bytes": temporary.stat().st_size,
         "adf_sha256": sha256(temporary),
