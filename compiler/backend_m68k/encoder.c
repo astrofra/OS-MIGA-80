@@ -229,6 +229,7 @@ static int emit_instruction(
     case MIGA80_IR_CALL_COS:
     case MIGA80_IR_CALL_TIME:
     case MIGA80_IR_CALL_CLS:
+    case MIGA80_IR_CALL_COLOR_RESPONSE:
     case MIGA80_IR_CALL_FLIP:
         {
         const enum miga80_ir_opcode op = instruction->opcode;
@@ -239,11 +240,25 @@ static int emit_instruction(
             op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
             op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
             op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
-            op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
+            op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET :
+            op == MIGA80_IR_CALL_COLOR_RESPONSE ? MIGA80_ABI_RUNTIME_COLOR_RESPONSE_HANDLER_OFFSET :
+            MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
         return ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_POSITION) || emit_u16(encoder, 0x201fU)) &&
             emit_u16(encoder, 0x206dU) && emit_u16(encoder, (uint16_t)offset) && emit_u16(encoder, 0x4e90U) &&
-            ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) || emit_u16(encoder, 0x2f00U));
+            ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_COLOR_RESPONSE || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) || emit_u16(encoder, 0x2f00U));
         }
+    case MIGA80_IR_CALL_PRINT:
+        return emit_u16(encoder, UINT16_C(0x202f)) && emit_u16(encoder, 12U) &&
+               emit_u16(encoder, UINT16_C(0x222f)) && emit_u16(encoder, 8U) &&
+               emit_u16(encoder, UINT16_C(0x242f)) && emit_u16(encoder, 4U) &&
+               emit_u16(encoder, UINT16_C(0x206d)) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_PRINT_START_HANDLER_OFFSET) &&
+               emit_u16(encoder, UINT16_C(0x4e90)) &&
+               emit_u16(encoder, UINT16_C(0x2017)) &&
+               emit_u16(encoder, UINT16_C(0x206d)) &&
+               emit_u16(encoder, MIGA80_ABI_RUNTIME_PRINT_END_HANDLER_OFFSET) &&
+               emit_u16(encoder, UINT16_C(0x4e90)) &&
+               emit_u16(encoder, UINT16_C(0x4fef)) && emit_u16(encoder, 16U);
     case MIGA80_IR_CALL_LAYER:
         return emit_u16(encoder, UINT16_C(0x201f)) &&
                emit_u16(encoder, UINT16_C(0x206d)) &&

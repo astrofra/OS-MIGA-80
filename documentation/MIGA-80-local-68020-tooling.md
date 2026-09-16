@@ -577,7 +577,7 @@ multiplication/division, explicit `fix(i32)`/`i32(fix)`, statement-only `/=`,
 nested `if`/`else`, and nested `while`,
 lowers it to typed stack IR and value IR, renders GNU
 m68k assembly at `-O0` or `-O1`, and provides a host CFG evaluator. The IR has
-up to 32 blocks with bounded successors. Each loop is normalized around one
+up to 64 blocks with bounded successors. Each loop is normalized around one
 preheader, header, dedicated latch, and dedicated exit. Multiple `continue`
 and `break` sites are folded through binary merge funnels; O1 verifies that form
 and inserts typed branch and loop join values. The optimizer solves bounded per-block liveness, treats

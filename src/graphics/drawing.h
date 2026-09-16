@@ -19,6 +19,12 @@ struct miga80_draw_triangle {
     uint32_t color;
 };
 
+struct miga80_draw_text {
+    uint32_t resource;
+    int32_t x, y;
+    uint32_t color, layer;
+};
+
 /* Pixel-center coverage, left/top inclusive and right/bottom exclusive. */
 struct miga80_draw_spans {
     int16_t left[256], right[256];
@@ -41,6 +47,10 @@ struct miga80_draw_surface {
     int32_t tri_x1, tri_y1;
     void (*planar_tri)(void *owner, const struct miga80_draw_triangle *triangle);
     struct miga80_draw_spans spans; /* Owner storage, never on the worker stack. */
+    uint32_t text_resource;
+    int32_t text_x, text_y;
+    void (*color_response)(void *owner, uint32_t response);
+    void (*text)(void *owner, const struct miga80_draw_text *text);
 };
 
 int miga80_draw_triangle_spans(struct miga80_draw_spans *spans,
@@ -53,6 +63,12 @@ void miga80_draw_tri_end(struct miga80_draw_surface *surface, uint32_t x, uint32
 void miga80_draw_clear(struct miga80_draw_surface *surface, uint32_t color);
 void miga80_draw_flip(struct miga80_draw_surface *surface);
 uint32_t miga80_draw_time(struct miga80_draw_surface *surface);
+void miga80_draw_color_response(struct miga80_draw_surface *surface,
+                                uint32_t response);
+void miga80_draw_print_start(struct miga80_draw_surface *surface,
+                             uint32_t resource, uint32_t x, uint32_t y);
+void miga80_draw_print_end(struct miga80_draw_surface *surface,
+                           uint32_t color);
 int miga80_draw_clip_line(struct miga80_draw_line *line);
 void miga80_draw_select(struct miga80_draw_surface *surface, uint32_t layer);
 void miga80_draw_pset(struct miga80_draw_surface *surface,

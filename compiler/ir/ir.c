@@ -222,7 +222,7 @@ struct lower_context {
     struct miga80_diagnostic *diagnostic;
     struct lower_edge control_edges[MIGA80_MAX_STATEMENTS];
     unsigned int control_edge_count;
-    uint32_t active_loops;
+    uint64_t active_loops;
     unsigned int loop_depth;
     unsigned int visited_statements;
     int returned;
@@ -451,11 +451,14 @@ static int lower_statement_list(struct lower_context *context,
                    statement->kind == MIGA80_AST_CALL_LINE ||
                    statement->kind == MIGA80_AST_CALL_TRI ||
                    statement->kind == MIGA80_AST_CALL_CLS ||
-                   statement->kind == MIGA80_AST_CALL_FLIP) {
+                   statement->kind == MIGA80_AST_CALL_FLIP ||
+                   statement->kind == MIGA80_AST_CALL_COLOR_RESPONSE ||
+                   statement->kind == MIGA80_AST_CALL_PRINT) {
             const unsigned int count = statement->kind == MIGA80_AST_CALL_MUSIC_STOP ? 0U :
                 statement->kind == MIGA80_AST_CALL_MUSIC_PLAY || statement->kind == MIGA80_AST_CALL_MUSIC_MUTE ? 1U :
                 statement->kind == MIGA80_AST_CALL_FLIP ? 0U :
-                statement->kind == MIGA80_AST_CALL_CLS ? 1U : statement->kind == MIGA80_AST_CALL_LAYER
+                statement->kind == MIGA80_AST_CALL_CLS || statement->kind == MIGA80_AST_CALL_COLOR_RESPONSE ? 1U :
+                statement->kind == MIGA80_AST_CALL_PRINT ? 4U : statement->kind == MIGA80_AST_CALL_LAYER
                 ? 1U : statement->kind == MIGA80_AST_CALL_TRI ? 7U : statement->kind == MIGA80_AST_CALL_LINE ? 5U : 3U;
             const enum miga80_ir_opcode opcode =
                 statement->kind == MIGA80_AST_CALL_MUSIC_PLAY ? MIGA80_IR_CALL_MUSIC_PLAY :
@@ -463,6 +466,8 @@ static int lower_statement_list(struct lower_context *context,
                 statement->kind == MIGA80_AST_CALL_MUSIC_MUTE ? MIGA80_IR_CALL_MUSIC_MUTE :
                 statement->kind == MIGA80_AST_CALL_FLIP ? MIGA80_IR_CALL_FLIP :
                 statement->kind == MIGA80_AST_CALL_CLS ? MIGA80_IR_CALL_CLS :
+                statement->kind == MIGA80_AST_CALL_COLOR_RESPONSE ? MIGA80_IR_CALL_COLOR_RESPONSE :
+                statement->kind == MIGA80_AST_CALL_PRINT ? MIGA80_IR_CALL_PRINT :
                 statement->kind == MIGA80_AST_CALL_LAYER ? MIGA80_IR_CALL_LAYER :
                 statement->kind == MIGA80_AST_CALL_TRI ? MIGA80_IR_CALL_TRI :
                 statement->kind == MIGA80_AST_CALL_LINE ? MIGA80_IR_CALL_LINE :
@@ -558,7 +563,7 @@ static int lower_statement_list(struct lower_context *context,
             unsigned int body_end;
             unsigned int latch_block = MIGA80_INVALID_BLOCK;
             const unsigned int control_start = context->control_edge_count;
-            const uint32_t outer_loops = context->active_loops;
+            const uint64_t outer_loops = context->active_loops;
             struct lower_edge header_exit_edge;
             struct lower_edge body_edge;
             unsigned int control_index;
@@ -575,7 +580,7 @@ static int lower_statement_list(struct lower_context *context,
                               MIGA80_INVALID_BLOCK, 1U)) {
                 return 0;
             }
-            context->active_loops |= UINT32_C(1) << header_block;
+            context->active_loops |= UINT64_C(1) << header_block;
             context->ir->block_loop_membership[header_block] =
                 context->active_loops;
             context->ir->block_loop_membership[body_block] =
@@ -980,11 +985,14 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                    instruction->opcode == MIGA80_IR_CALL_LINE ||
                    instruction->opcode == MIGA80_IR_CALL_TRI ||
                    instruction->opcode == MIGA80_IR_CALL_CLS ||
-                   instruction->opcode == MIGA80_IR_CALL_FLIP) {
+                   instruction->opcode == MIGA80_IR_CALL_FLIP ||
+                   instruction->opcode == MIGA80_IR_CALL_COLOR_RESPONSE ||
+                   instruction->opcode == MIGA80_IR_CALL_PRINT) {
             const unsigned int count = instruction->opcode == MIGA80_IR_CALL_MUSIC_STOP ? 0U :
                 instruction->opcode == MIGA80_IR_CALL_MUSIC_PLAY || instruction->opcode == MIGA80_IR_CALL_MUSIC_MUTE ? 1U :
                 instruction->opcode == MIGA80_IR_CALL_FLIP ? 0U :
-                instruction->opcode == MIGA80_IR_CALL_CLS ? 1U : instruction->opcode == MIGA80_IR_CALL_LAYER
+                instruction->opcode == MIGA80_IR_CALL_CLS || instruction->opcode == MIGA80_IR_CALL_COLOR_RESPONSE ? 1U :
+                instruction->opcode == MIGA80_IR_CALL_PRINT ? 4U : instruction->opcode == MIGA80_IR_CALL_LAYER
                 ? 1U : instruction->opcode == MIGA80_IR_CALL_TRI ? 7U : instruction->opcode == MIGA80_IR_CALL_LINE ? 5U : 3U;
             unsigned int argument;
 
@@ -994,8 +1002,11 @@ static int validate_block_stack(const struct miga80_ir_function *ir,
                             "typed IR drawing call has invalid arguments");
             }
             for (argument = 0U; argument < count; ++argument) {
-                if (stack[argument] != (argument + 1U == count
-                        ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32)) {
+                const enum miga80_type expected =
+                    (instruction->opcode == MIGA80_IR_CALL_PRINT && argument == 0U) ||
+                    instruction->opcode == MIGA80_IR_CALL_COLOR_RESPONSE ||
+                    argument + 1U == count ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32;
+                if (stack[argument] != expected) {
                     return fail(diagnostic, instruction->line,
                                 instruction->column,
                                 "typed IR drawing call has invalid types");
@@ -1057,7 +1068,7 @@ int miga80_validate_ir(const struct miga80_ir_function *ir,
                        struct miga80_diagnostic *diagnostic)
 {
     unsigned char instruction_owners[MIGA80_MAX_IR_INSTRUCTIONS];
-    uint32_t valid_loop_bits;
+    uint64_t valid_loop_bits;
     unsigned int scalar_parameters = 0U;
     unsigned int address_parameters = 0U;
     unsigned int block_index;
@@ -1108,8 +1119,8 @@ int miga80_validate_ir(const struct miga80_ir_function *ir,
     }
     valid_loop_bits =
         ir->block_count == MIGA80_MAX_BASIC_BLOCKS
-            ? UINT32_MAX
-            : (UINT32_C(1) << ir->block_count) - UINT32_C(1);
+            ? UINT64_MAX
+            : (UINT64_C(1) << ir->block_count) - UINT64_C(1);
     (void)memset(instruction_owners, 0, sizeof(instruction_owners));
     for (block_index = 0U; block_index < ir->block_count; ++block_index) {
         const struct miga80_ir_basic_block *block = &ir->blocks[block_index];
@@ -1445,6 +1456,25 @@ int miga80_evaluate_ir_with_runtime(
             case MIGA80_IR_CALL_FLIP:
                 if (runtime == NULL || runtime->flip == NULL || !runtime->flip(runtime->context)) {
                     return fail(diagnostic, instruction->line, instruction->column, "flip runtime failed"); }
+                break;
+            case MIGA80_IR_CALL_COLOR_RESPONSE:
+                if (runtime == NULL || runtime->color_response == NULL ||
+                    !runtime->color_response(runtime->context,
+                                             stack[--stack_size])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column,
+                                "color_response runtime failed");
+                }
+                break;
+            case MIGA80_IR_CALL_PRINT:
+                if (runtime == NULL || runtime->print == NULL ||
+                    !runtime->print(runtime->context, stack[0], stack[1],
+                                    stack[2], stack[3])) {
+                    return fail(diagnostic, instruction->line,
+                                instruction->column,
+                                "print runtime service failed");
+                }
+                stack_size = 0U;
                 break;
             case MIGA80_IR_CALL_LAYER:
                 if (runtime == NULL || runtime->layer == NULL ||

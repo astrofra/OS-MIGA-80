@@ -198,3 +198,31 @@ uint32_t miga80_draw_time(struct miga80_draw_surface *surface)
 {
     return surface->time != NULL ? surface->time(surface->owner) : 0U;
 }
+
+void miga80_draw_color_response(struct miga80_draw_surface *surface,
+                                uint32_t response)
+{
+    if (response < MIGA80_RESPONSE_COUNT && surface->color_response != NULL) {
+        surface->color_response(surface->owner, response);
+    }
+}
+
+void miga80_draw_print_start(struct miga80_draw_surface *surface,
+                             uint32_t resource, uint32_t x, uint32_t y)
+{
+    surface->text_resource = resource;
+    surface->text_x = (int32_t)x;
+    surface->text_y = (int32_t)y;
+}
+
+void miga80_draw_print_end(struct miga80_draw_surface *surface,
+                           uint32_t color)
+{
+    const struct miga80_draw_text text = {
+        surface->text_resource, surface->text_x, surface->text_y, color,
+        surface->layer
+    };
+    if (color < 16U && surface->text != NULL) {
+        surface->text(surface->owner, &text);
+    }
+}

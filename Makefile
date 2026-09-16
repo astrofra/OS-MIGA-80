@@ -444,7 +444,7 @@ MIGA80_DEMO_SOURCE := src/demo/music_host.c src/audio/mod.c src/demo/intro.c src
 	src/demo/drawing_host.c src/demo/animation.c src/graphics/drawing.c src/graphics/triangle.c src/graphics/c2p4_reference.c \
 	src/graphics/c2p4_m68k.c src/graphics/c2p4_kalms.c
 MIGA80_DEMO_HEADERS := src/demo/music_host.h src/audio/mod.h src/demo/intro.h src/demo/intro_effect.h src/audio/boot_jingle.h src/demo/file_picker.h src/demo/supervisor.h src/demo/stop_test.h $(EDITOR_HEADER) \
-	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/c2p4_reference.h
+	src/demo/drawing_host.h src/demo/animation.h src/graphics/drawing.h src/graphics/color_response_data.h src/graphics/c2p4_reference.h
 MIGA80_DEMO_RUNTIME_SOURCE := src/demo/music_bridge.S src/demo/runtime_guarded.S src/demo/drawing_bridge.S src/graphics/triangle_m68k.S \
 	src/graphics/c2p4_m68k.S src/graphics/c2p4_kalms.S
 MIGA80_DEMO_COMPILER_SOURCES := $(COMPILER_ABI_SOURCE) \

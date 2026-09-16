@@ -577,9 +577,9 @@ static int build_predecessors(const struct miga80_ir_function *source,
     return 1;
 }
 
-static uint32_t block_bit(unsigned int block_index)
+static uint64_t block_bit(unsigned int block_index)
 {
-    return UINT32_C(1) << block_index;
+    return UINT64_C(1) << block_index;
 }
 
 static int analyze_loops(const struct miga80_ir_function *source,
@@ -587,11 +587,11 @@ static int analyze_loops(const struct miga80_ir_function *source,
                          struct value_lower_state *state,
                          struct miga80_diagnostic *diagnostic)
 {
-    uint32_t dominators[MIGA80_MAX_BASIC_BLOCKS];
-    const uint32_t all_blocks =
+    uint64_t dominators[MIGA80_MAX_BASIC_BLOCKS];
+    const uint64_t all_blocks =
         source->block_count == MIGA80_MAX_BASIC_BLOCKS
-            ? UINT32_MAX
-            : block_bit(source->block_count) - UINT32_C(1);
+            ? UINT64_MAX
+            : block_bit(source->block_count) - UINT64_C(1);
     unsigned int block_index;
     unsigned int pass_count = 0U;
     int changed;
@@ -608,8 +608,8 @@ static int analyze_loops(const struct miga80_ir_function *source,
              ++block_index) {
             const struct miga80_value_basic_block *block =
                 &result->blocks[block_index];
-            uint32_t merged = all_blocks;
-            uint32_t updated;
+            uint64_t merged = all_blocks;
+            uint64_t updated;
             unsigned int predecessor_index;
 
             if (block_index == source->entry_block) {
@@ -661,9 +661,9 @@ static int analyze_loops(const struct miga80_ir_function *source,
         const struct miga80_value_basic_block *header =
             &result->blocks[block_index];
         const unsigned int latch = state->loop_latch[block_index];
-        uint32_t loop_blocks;
-        uint32_t declared_loop_blocks = 0U;
-        uint32_t pending;
+        uint64_t loop_blocks;
+        uint64_t declared_loop_blocks = 0U;
+        uint64_t pending;
         unsigned int predecessor_index;
         unsigned int local_mask = 0U;
         unsigned int exit_block = MIGA80_INVALID_BLOCK;
@@ -720,7 +720,7 @@ static int analyze_loops(const struct miga80_ir_function *source,
                  ++predecessor_index) {
                 const unsigned int predecessor =
                     block->predecessors[predecessor_index];
-                uint32_t predecessor_bit;
+                uint64_t predecessor_bit;
 
                 if (predecessor >= source->block_count) {
                     return fail(diagnostic, 0U, 0U,
@@ -1044,6 +1044,34 @@ static int lower_block_values(const struct miga80_ir_function *source,
                 MIGA80_INVALID_VALUE, 0U, 0U, instruction->line, instruction->column, diagnostic);
             if (value != MIGA80_INVALID_VALUE) { continue; }
             break;
+        case MIGA80_IR_CALL_COLOR_RESPONSE:
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_COLOR_RESPONSE,
+                              stack[--stack_size], MIGA80_INVALID_VALUE,
+                              0U, 0U, instruction->line,
+                              instruction->column, diagnostic);
+            if (value != MIGA80_INVALID_VALUE) { continue; }
+            break;
+        case MIGA80_IR_CALL_PRINT: {
+            const unsigned int color = stack[--stack_size];
+            const unsigned int y = stack[--stack_size];
+            const unsigned int x = stack[--stack_size];
+            const unsigned int resource = stack[--stack_size];
+
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_PRINT_START,
+                              resource, x, 0U, 0U, instruction->line,
+                              instruction->column, diagnostic);
+            if (value == MIGA80_INVALID_VALUE) { break; }
+            result->values[value].third = y;
+            value = add_value(result, MIGA80_TYPE_VOID,
+                              MIGA80_VALUE_CALL_PRINT_END,
+                              color, MIGA80_INVALID_VALUE, 0U, 0U,
+                              instruction->line, instruction->column,
+                              diagnostic);
+            if (value != MIGA80_INVALID_VALUE) { continue; }
+            break;
+        }
         case MIGA80_IR_CALL_LAYER:
             value = add_value(result, MIGA80_TYPE_VOID, MIGA80_VALUE_CALL_LAYER,
                               stack[--stack_size], MIGA80_INVALID_VALUE,

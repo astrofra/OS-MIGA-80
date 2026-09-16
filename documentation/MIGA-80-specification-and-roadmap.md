@@ -753,7 +753,8 @@ The 1.0 API MUST cover:
 - pixels and primitives: `clear`, `pixel`, `line`, `rect`, `rect_fill`, `circle`, `circle_fill`;
 - planar assets: `tile`, `tile_region`, and `map_draw`;
 - virtual objects: `object_set`, `object_hide`, `object_clear`, and bounded status/profiling queries;
-- text: `print` with the built-in font;
+- text: `print(text, x, y, color)` with the built-in font and exact logical
+  pixel positioning;
 - math: integer, fixed-point, trigonometric lookup, clamp, min/max, and deterministic random;
 - audio: module play/stop/position and debug mute controls;
 - diagnostics: bounded `trace` captured for display after restoration.
@@ -850,21 +851,21 @@ Consequently, a predefined MIGA-80 gamut may draw each of its 4,096 entries from
 Version 1.0 MUST provide the neutral RGB12 response plus exactly five
 photographic-stock profiles, three historical-video profiles, two common
 color-vision-deficiency simulations, and one console-inspired profile. MIGA Lua
-selects one with the declarative intrinsic:
+selects one with the state-setting intrinsic:
 
 ```lua
 color_response(RESPONSE_WARM_NEGATIVE)
 ```
 
-The argument MUST be one of the literal symbols below. It is not an integer,
-string, table ordinal, native address or user-supplied LUT. Omitting the call
-selects `RESPONSE_NEUTRAL`. A source unit may contain at most one effective
-selection, at a statically single-execution initialization site; a dynamic,
-conditional or repeated selection is a compile-time error. The compiler records
-the corresponding stable profile identifier and version in cartridge metadata,
-and the host validates or constructs the selected LUT before native execution.
-`color_response` therefore declares cartridge rendering policy; it is not a
-game-time palette effect and cannot change during exclusive takeover.
+The argument is a `u8` profile value normally obtained from one of the symbolic
+constants below. Omitting the call selects `RESPONSE_NEUTRAL`. Calls may be
+dynamic, conditional and repeated. A valid call is ordered after earlier draw
+commands, recolors existing indices in both playfields, and publishes the 32
+active AGA palette entries without rewriting pixels; an invalid dynamic value
+leaves the current response unchanged. The compiler records every statically
+referenced profile and version so the host can prepare the required data before
+native execution. No disk access, allocation, decompression, floating point or
+matrix evaluation is permitted when the response changes during takeover.
 
 | Stable MIGA Lua key | Profile family | Version 1.0 response target | Reference year |
 | --- | --- | --- | ---: |
@@ -889,7 +890,7 @@ keys are primarily editor review modes, but remain deterministic selectable
 responses so captures and diagnostic cartridges can reproduce the preview
 exactly.
 
-The stock and console names are response targets, not claims of manufacturer endorsement or exact chemical or hardware reproduction; public preset naming remains subject to trademark review. The profile is selected per cartridge and applies uniformly to editor preview, reference rendering, hardware sprites, planar fallback, and exclusive runtime output.
+The stock and console names are response targets, not claims of manufacturer endorsement or exact chemical or hardware reproduction; public preset naming remains subject to trademark review. The current profile applies uniformly to editor preview, reference rendering, hardware sprites, planar fallback, and exclusive runtime output.
 
 `palette_set`, whole-palette selection and future raster-palette commands always
 accept logical RGB12. They resolve changed entries through the selected response
@@ -946,7 +947,7 @@ Once selected, mapping a logical color is semantically just:
 aga_rgb = response_lut[logical_rgb12 & 0x0fff];
 ```
 
-This direct lookup is the only exclusive-runtime color-response operation. It requires no per-color transform, interpolation, multiplication, division, decompression, table generation, or floating point. The 31 active opaque colors SHOULD additionally be cached as 32-bit AGA values, so an unchanged palette performs no LUT reads or register preparation during a frame. The selected table, active cache, and response profile are immutable after exclusive takeover; no response-pack disk I/O, block decompression, or fixed-point reconstruction is permitted there.
+This direct lookup is the only exclusive-runtime color-response operation. It requires no per-color transform, interpolation, multiplication, division, decompression, table generation, or floating point. The 31 active opaque colors SHOULD additionally be cached as 32-bit AGA values, so an unchanged palette performs no LUT reads or register preparation during a frame. Response tables are immutable after exclusive takeover. The selected profile may change, but only by selecting prevalidated resident data and publishing a precomputed cache of the active palette. For all twelve profiles, 31 cached `uint32_t` colors cost 1,488 bytes. No response-pack disk I/O, block decompression, fixed-point reconstruction, matrix work or floating point is permitted there.
 
 For the floppy edition, Phase 0 SHOULD prefer dynamic fixed-point generation if its descriptors, code, latency, and scratch memory are materially cheaper than retaining the compressed LUT pack and it remains byte-identical to the canonical output. If the packed route wins, the response pack is a mandatory startup resource and MUST be read before the boot disk may be exchanged. If the dynamic route wins, all descriptors and small shared curve tables MUST already be resident before disk exchange. A hybrid MAY keep packed blocks only for profiles whose response cannot be reconstructed compactly or quickly enough, but every profile still produces the same table format and runtime behavior.
 

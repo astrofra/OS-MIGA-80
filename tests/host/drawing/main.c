@@ -16,6 +16,8 @@ static uint8_t expected[65536];
 static struct miga80_draw_surface surface;
 static uint32_t trace = UINT32_C(0x811c9dc5);
 static unsigned int line_count;
+static uint32_t response_seen, text_resource_seen, text_x_seen, text_y_seen,
+                text_color_seen;
 
 static uint32_t checksum(const uint8_t *bytes, size_t size)
 {
@@ -70,6 +72,24 @@ static int oracle_tri(void *context, uint32_t x0, uint32_t y0, uint32_t x1,
     miga80_draw_line_start(context, x0, y0, color);
     miga80_draw_tri_middle(context, x1, y1);
     miga80_draw_tri_end(context, x2, y2);
+    return 1;
+}
+
+static int oracle_response(void *context, uint32_t response)
+{
+    (void)context;
+    response_seen = response;
+    return 1;
+}
+
+static int oracle_print(void *context, uint32_t resource, uint32_t x,
+                        uint32_t y, uint32_t color)
+{
+    (void)context;
+    text_resource_seen = resource;
+    text_x_seen = x;
+    text_y_seen = y;
+    text_color_seen = color;
     return 1;
 }
 
@@ -160,7 +180,10 @@ static void rejection_tests(void)
         "function main(): void tri(1,2,3,4,5,6) end",
         "function main(): void tri(1,2,3,4,5,6,7,8) end",
         "function main(): void tri(1,2,3,true,5,6,7) end",
-        "function main(): void tri(1,2,3,4,5,6,true) end"
+        "function main(): void tri(1,2,3,4,5,6,true) end",
+        "function main(): void color_response(true) end",
+        "function main(): void print(1,2,3,4) end",
+        "function main(): void print(\"X\",2,3) end"
     };
     static const char valid[] =
         "function main(): void layer(PLANAR) line(1, 2, 3, 4, 5) end";
@@ -196,6 +219,41 @@ static void rejection_tests(void)
     assert(i != value.value_count);
 }
 
+static void response_and_text_tests(void)
+{
+    static const char source[] =
+        "function main(): void "
+        "color_response(RESPONSE_VIOLET_DRIVE) print(\"OK\",3,4,9) end";
+    static struct miga80_ast_function ast;
+    static struct miga80_ir_function ir;
+    static struct miga80_value_function value;
+    struct miga80_diagnostic diagnostic;
+    struct miga80_ir_runtime runtime = {0};
+    uint8_t code[1024];
+    uint32_t result;
+    size_t size;
+
+    runtime.context = &surface;
+    runtime.color_response = oracle_response;
+    runtime.print = oracle_print;
+    assert(miga80_parse_function(source, sizeof(source) - 1U, &ast,
+                                 &diagnostic));
+    assert(miga80_lower_function(&ast, &ir, &diagnostic));
+    assert(miga80_build_value_ir(&ir, &value, &diagnostic));
+    assert(miga80_evaluate_ir_with_runtime(&ir, NULL, 0U, &result, &runtime,
+                                           &diagnostic));
+    assert(response_seen == MIGA80_RESPONSE_VIOLET_DRIVE);
+    assert(text_resource_seen < ast.pool.entry_count && text_x_seen == 3U &&
+           text_y_seen == 4U && text_color_seen == 9U);
+    assert(ast.pool.entries[text_resource_seen].length == 2U);
+    assert(memcmp(miga80_pool_entry_bytes(&ast.pool, text_resource_seen),
+                  "OK", 2U) == 0);
+    assert(miga80_encode_m68k_o0(code, sizeof(code), &ir, &size,
+                                 &diagnostic));
+    assert(miga80_encode_m68k_o1(code, sizeof(code), &value, &size,
+                                 &diagnostic));
+}
+
 static void save(const char *directory, const char *name, const void *data, size_t size)
 {
     char path[1024];
@@ -212,7 +270,10 @@ int main(int argc, char **argv)
     static struct miga80_ir_function ir;
     static struct miga80_value_function value;
     struct miga80_diagnostic diagnostic;
-    struct miga80_ir_runtime runtime = {&surface, oracle_pset, oracle_layer, oracle_line, NULL, NULL, NULL, oracle_tri, NULL, NULL, NULL, NULL};
+    struct miga80_ir_runtime runtime = {
+        &surface, oracle_pset, oracle_layer, oracle_line, NULL, NULL, NULL,
+        oracle_tri, NULL, NULL, NULL, NULL, NULL, NULL
+    };
     uint8_t code[4096];
     char source[4097];
     size_t size, code_size, bound;
@@ -223,6 +284,7 @@ int main(int argc, char **argv)
     triangle_tests();
     primitive_tests();
     rejection_tests();
+    response_and_text_tests();
     input = fopen(argv[1], "rb");
     assert(input != NULL);
     size = fread(source, 1U, sizeof(source)-1U, input);

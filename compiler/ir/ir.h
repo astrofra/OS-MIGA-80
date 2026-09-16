@@ -9,7 +9,7 @@
 #define MIGA80_MAX_IR_INSTRUCTIONS \
     (MIGA80_MAX_AST_NODES + 3U * MIGA80_MAX_STATEMENTS)
 #define MIGA80_MAX_IR_STACK MIGA80_MAX_AST_NODES
-#define MIGA80_MAX_BASIC_BLOCKS 32U
+#define MIGA80_MAX_BASIC_BLOCKS 64U
 #define MIGA80_MAX_BLOCK_SUCCESSORS 2U
 #define MIGA80_INVALID_BLOCK UINT_MAX
 
@@ -54,6 +54,7 @@ enum miga80_ir_opcode {
     MIGA80_IR_CALL_TRI,
     MIGA80_IR_CALL_SIN, MIGA80_IR_CALL_COS, MIGA80_IR_CALL_TIME,
     MIGA80_IR_CALL_CLS, MIGA80_IR_CALL_FLIP,
+    MIGA80_IR_CALL_COLOR_RESPONSE, MIGA80_IR_CALL_PRINT,
     MIGA80_IR_CALL_MUSIC_PLAY, MIGA80_IR_CALL_MUSIC_STOP,
     MIGA80_IR_CALL_MUSIC_POSITION, MIGA80_IR_CALL_MUSIC_MUTE,
     MIGA80_IR_BRANCH_FALSE,
@@ -86,7 +87,7 @@ struct miga80_ir_function {
     struct miga80_ir_instruction instructions[MIGA80_MAX_IR_INSTRUCTIONS];
     unsigned int instruction_count;
     struct miga80_ir_basic_block blocks[MIGA80_MAX_BASIC_BLOCKS];
-    uint32_t block_loop_membership[MIGA80_MAX_BASIC_BLOCKS];
+    uint64_t block_loop_membership[MIGA80_MAX_BASIC_BLOCKS];
     unsigned int block_count;
     unsigned int entry_block;
     struct miga80_constant_pool pool;
@@ -107,6 +108,9 @@ struct miga80_ir_runtime {
     int (*music_stop)(void *context);
     uint32_t (*music_position)(void *context);
     int (*music_mute)(void *context, uint32_t mask);
+    int (*color_response)(void *context, uint32_t response);
+    int (*print)(void *context, uint32_t resource, uint32_t x, uint32_t y,
+                 uint32_t color);
 };
 
 int miga80_lower_function(const struct miga80_ast_function *ast,

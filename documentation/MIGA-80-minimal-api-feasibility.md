@@ -1,6 +1,7 @@
 # MIGA-80 Minimal Runtime API Feasibility Study
 
-- **Status:** design proposal, not an implemented or frozen API
+- **Status:** design proposal; dynamic color response and positioned text are
+  implemented vertical slices, while the remaining additions are not frozen
 - **Date:** 2026-09-16
 - **Scope:** indexed graphics, off-screen drawing and MOD playback; sprites, tile
   maps, sound effects and input are intentionally outside this study
@@ -21,7 +22,7 @@ The recommended first public slice is:
 - retain `cls`, `pset`, `line`, `tri`, `flip`, `time`, and the two logical screen
   layers;
 - add `pget`, filled and outline rectangles, atomic palette updates, and a
-  declarative color-response selection;
+  dynamic color-response selection and positioned built-in-font text;
 - add `music_pause`, `music_resume`, and `music_volume` to the existing music
   API;
 - follow with opaque, preallocated indexed surfaces and `blit`/`blit_key`;
@@ -40,7 +41,7 @@ to use while preserving the Amiga-specific advantages of native planar drawing,
 the blitter, dual playfields and Paula audio.
 
 This is a complete first **graphics and music slice**, not a complete console API.
-Input, text, persistent storage, sprites, tile maps and sound effects still need
+Input, richer text layout, persistent storage, sprites, tile maps and sound effects still need
 separate designs before the whole cartridge API can be called complete.
 
 ## Existing baseline
@@ -57,7 +58,8 @@ point.
 | Lines | Clipped, endpoint-inclusive `line` on both layers | Already complete |
 | Polygons | Filled, clipped `tri` on both layers | Keep triangle as the minimal polygon primitive |
 | Presentation | Two complete AGA buffers and `flip()` | Already complete; keep front/back buffers private |
-| Palette | Fixed 16-color banks, 31 opaque colors in dual-playfield mode | Add logical palette operations, color-response selection and frame-boundary publication |
+| Palette | Fixed 16-color banks plus dynamic selection among 12 canonical color responses | Add arbitrary logical palette operations and frame-boundary staging |
+| Text | `print("literal", x, y, color)` on either layer with the 4 x 8 font | Add dynamic strings only when a bounded formatting model exists |
 | Off-screen images | No public scratch surface or block copy | Add handles and blitting in a second slice |
 | Music | `music_play`, `music_stop`, `music_mute`, `music_position` | Add pause/resume and master volume |
 
@@ -304,12 +306,13 @@ the minimum.
 color_response(RESPONSE_VIOLET_DRIVE)
 ```
 
-`color_response(profile)` is a declarative intrinsic, not a mutable draw-state
-call. Its argument must be one literal symbol from the table below. The compiler
-extracts the selected key and version into cartridge metadata, and the host
-loads or constructs the matching LUT before native execution. Omitting the call
-selects `RESPONSE_NEUTRAL`. Dynamic, conditional, repeated or game-time profile
-changes are rejected in the first API.
+`color_response(profile)` changes global color-response state. Its `u8`
+argument can be one of the constants below or a dynamic value derived from
+them. The change recolors both `PLANAR` and `PIXEL` without rewriting either
+pixel buffer; the owner flushes preceding drawing commands and republishes the
+32 hardware palette entries as one ordered operation. Omitting the call selects
+`RESPONSE_NEUTRAL`. An invalid dynamic value leaves the current response
+unchanged.
 
 | Stable API key | LUT documented by the original study |
 | --- | --- |
@@ -339,6 +342,29 @@ colors while building a bounded, double-buffered Copper list. The Copper itself
 never reads the response LUT. Intensive raster effects are dominated by the two
 register writes required for each full RGB24 color, list size, sequential update
 timing and Chip-RAM DMA contention rather than by this indirection.
+
+The current implementation embeds the canonical projections of the built-in
+16-color Workbench Sunset logical palette for all twelve responses. This is a
+small, exact first slice, not yet the general 4,096-entry LUT path required by
+future `palette_set` and `palette_use`.
+
+## Positioned text
+
+```lua
+print("RESPONSE_NEUTRAL", 4, 4, 9)
+```
+
+`print(text, x, y, color)` draws the built-in 4 x 8 font at exact logical pixel
+coordinates on the selected layer. In the current compiler `text` must be a
+literal string interned in the cartridge constant pool. Glyph pixels overwrite
+the destination with `color`; unset glyph pixels remain unchanged. Newlines
+return to the original `x` and advance by eight pixels, and drawing clips to the
+256 x 256 target. Text on `PLANAR` is an ordered owner operation so it observes
+all earlier queued drawing.
+
+The executable example is [`assets/demo/color-responses.lua`](../assets/demo/color-responses.lua).
+It places a reversed, ordered-dither ramp in each playfield, changes response
+every three seconds, prints the active response name and runs until ESC.
 
 ## Off-screen surfaces and blitting
 
@@ -496,7 +522,8 @@ and TIC-80 [`music`](https://github.com/nesbox/TIC-80/wiki/music).
 | `rect` / `rectb` | High | Exact half-open clipping and two optimized backends |
 | One-entry palette update | High | Logical RGB12 validation and safe frame publication |
 | Whole-palette resource | High | Resource scan, 32-byte format validation and atomic staging |
-| `color_response` selection | High | Compiler metadata, profile/version validation and LUT preparation before execution |
+| Dynamic `color_response` selection | High, implemented for the built-in palette | Ordered 32-entry RGB24 publication; general RGB12 palettes still require LUT preparation |
+| Positioned `print` | High, implemented | Literal strings, 4 x 8 built-in font, layer ordering and clipping |
 | Music master volume | High | Small owner command around existing ptplayer support |
 | Music pause/resume | High | Silence Paula as well as freezing ticks; interrupt races |
 | Scratch surface handles | Medium | New compiler type, resource discovery, quota and ownership |
@@ -516,7 +543,7 @@ profiles and largest-block data.
 ## ABI and implementation implications
 
 The private native ABI currently appends one handler pointer per service to a
-100-byte drawing context, with at most three scalar and two address arguments.
+112-byte drawing context, with at most three scalar and two address arguments.
 It is possible to keep appending handlers while preserving the frozen prefix,
 but surfaces and blits are the point where a versioned graphics service table or
 command dispatcher becomes cleaner than one context field per public call.
@@ -542,7 +569,7 @@ A practical implementation outline is:
 - add `pget` with explicit barrier behavior;
 - add `rect` and `rectb`;
 - add `palette_set`, `palette_get`, `palette_use`, `palette_reset`, and the
-  declarative `color_response` selection;
+  dynamic `color_response` selection and positioned `print`;
 - add `music_pause`, `music_resume`, and `music_volume`;
 - retain `layer` for now, documenting whether it will become an alias of
   `target`.
@@ -578,8 +605,10 @@ The API should not be considered complete without these checks:
 - `pget` immediately after queued planar lines, clears, triangles and blits;
 - palette updates before/after drawing, multiple updates before one `flip`,
   resets, invalid RGB12, and overlay index-0 transparency;
-- every `color_response` key, the neutral default, rejected dynamic or duplicate
-  selections, profile/version mismatch, and editor/runtime LUT identity;
+- every `color_response` key, the neutral default, dynamic repeated selection,
+  invalid-value no-op, ordered publication, and editor/runtime LUT identity;
+- positioned text on both layers, clipping, newline handling, invalid resources,
+  and ordering after queued planar drawing;
 - exact whole-palette resource validation for truncation, trailing bytes and
   invalid high bits;
 - blits clipped on every edge, self-overlap in every direction, transparent-key

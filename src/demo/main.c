@@ -166,6 +166,12 @@ typedef char drawing_context_layout_check[
     sizeof(struct miga80_drawing_context) == MIGA80_ABI_RUNTIME_DRAWING_CONTEXT_SIZE &&
     offsetof(struct miga80_drawing_context, drawing_state) ==
         MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET &&
+    offsetof(struct miga80_drawing_context, color_response_handler) ==
+        MIGA80_ABI_RUNTIME_COLOR_RESPONSE_HANDLER_OFFSET &&
+    offsetof(struct miga80_drawing_context, print_start_handler) ==
+        MIGA80_ABI_RUNTIME_PRINT_START_HANDLER_OFFSET &&
+    offsetof(struct miga80_drawing_context, print_end_handler) ==
+        MIGA80_ABI_RUNTIME_PRINT_END_HANDLER_OFFSET &&
     offsetof(struct miga80_draw_surface, layer) == 0U &&
     offsetof(struct miga80_draw_surface, pixel_written) == 4U ? 1 : -1];
 
@@ -182,6 +188,9 @@ extern void miga80_runtime_line_start(void);
 extern void miga80_runtime_line_end(void);
 extern void miga80_runtime_tri_middle(void);
 extern void miga80_runtime_tri_end(void);
+extern void miga80_runtime_color_response(void);
+extern void miga80_runtime_print_start(void);
+extern void miga80_runtime_print_end(void);
 extern void miga80_runtime_fault(void);
 extern void miga80_runtime_test_fault(void);
 extern void miga80_runtime_test_stall(void);
@@ -1443,7 +1452,7 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     CacheClearE((APTR)code, (ULONG)code_size, CACRF_ClearI);
     (void)memset(chunky, 0, DEMO_CHUNKY_BYTES);
     drawing = miga80_host_drawing_create(chunky, &last_drawing_context,
-                                          &run_events.drawing);
+                                          &run_events.drawing, screen, ast);
     if (drawing == NULL) {
         failure = "drawing_memory";
         goto cleanup;
@@ -1477,6 +1486,12 @@ static int __attribute__((noinline)) compile_and_run_on_current_stack(void)
     last_drawing_context.line_end_handler = (uint32_t)(uintptr_t)miga80_runtime_line_end;
     last_drawing_context.tri_middle_handler = (uint32_t)(uintptr_t)miga80_runtime_tri_middle;
     last_drawing_context.tri_end_handler = (uint32_t)(uintptr_t)miga80_runtime_tri_end;
+    last_drawing_context.color_response_handler =
+        (uint32_t)(uintptr_t)miga80_runtime_color_response;
+    last_drawing_context.print_start_handler =
+        (uint32_t)(uintptr_t)miga80_runtime_print_start;
+    last_drawing_context.print_end_handler =
+        (uint32_t)(uintptr_t)miga80_runtime_print_end;
     last_runtime.fault_handler = (uint32_t)(uintptr_t)miga80_runtime_fault;
     last_runtime.pset_handler = (uint32_t)(uintptr_t)(test_stalled_service
                                     ? miga80_runtime_test_stall

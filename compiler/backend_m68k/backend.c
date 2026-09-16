@@ -539,6 +539,7 @@ int miga80_emit_gnu_m68k(FILE *output,
         case MIGA80_IR_CALL_COS:
         case MIGA80_IR_CALL_TIME:
         case MIGA80_IR_CALL_CLS:
+        case MIGA80_IR_CALL_COLOR_RESPONSE:
         case MIGA80_IR_CALL_FLIP:
         {
             const enum miga80_ir_opcode op = instruction->opcode;
@@ -549,14 +550,28 @@ int miga80_emit_gnu_m68k(FILE *output,
             op == MIGA80_IR_CALL_SIN ? MIGA80_ABI_RUNTIME_SIN_HANDLER_OFFSET :
                 op == MIGA80_IR_CALL_COS ? MIGA80_ABI_RUNTIME_COS_HANDLER_OFFSET :
                 op == MIGA80_IR_CALL_TIME ? MIGA80_ABI_RUNTIME_TIME_HANDLER_OFFSET :
-                op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET : MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
+                op == MIGA80_IR_CALL_CLS ? MIGA80_ABI_RUNTIME_CLS_HANDLER_OFFSET :
+                op == MIGA80_IR_CALL_COLOR_RESPONSE ? MIGA80_ABI_RUNTIME_COLOR_RESPONSE_HANDLER_OFFSET :
+                MIGA80_ABI_RUNTIME_FLIP_HANDLER_OFFSET;
             success = ((op == MIGA80_IR_CALL_TIME || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_POSITION) ||
                 output_line(output, "        move.l  (%%a7)+,%%d0\n")) &&
                 output_line(output, "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n", offset) &&
-                ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) ||
+                ((op == MIGA80_IR_CALL_CLS || op == MIGA80_IR_CALL_COLOR_RESPONSE || op == MIGA80_IR_CALL_FLIP || op == MIGA80_IR_CALL_MUSIC_PLAY || op == MIGA80_IR_CALL_MUSIC_STOP || op == MIGA80_IR_CALL_MUSIC_MUTE) ||
                  output_line(output, "        move.l  %%d0,-(%%a7)\n"));
             break;
         }
+        case MIGA80_IR_CALL_PRINT:
+            success = output_line(output,
+                "        move.l  12(%%a7),%%d0\n"
+                "        move.l  8(%%a7),%%d1\n"
+                "        move.l  4(%%a7),%%d2\n"
+                "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n"
+                "        move.l  (%%a7),%%d0\n"
+                "        movea.l %u(%%a5),%%a0\n        jsr     (%%a0)\n"
+                "        lea     16(%%a7),%%a7\n",
+                MIGA80_ABI_RUNTIME_PRINT_START_HANDLER_OFFSET,
+                MIGA80_ABI_RUNTIME_PRINT_END_HANDLER_OFFSET);
+            break;
         case MIGA80_IR_CALL_LAYER:
             success = output_line(output,
                 "        move.l  (%%a7)+,%%d0\n"

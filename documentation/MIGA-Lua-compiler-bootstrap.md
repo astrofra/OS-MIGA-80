@@ -66,7 +66,7 @@ source expression can obtain that wrapping bit pattern through arithmetic.
 Short string literals use
 single or double quotes and accept `\\`, `\'`, `\"`, `\n`, `\r`, `\t`,
 `\0`, and `\xNN`; raw newlines are rejected. A function has at most 16
-function-scoped typed locals and 80 statements (384 AST nodes) including nested branches and
+function-scoped typed locals and 128 statements (512 AST nodes) including nested branches and
 the final return.
 Semicolons are optional statement separators. A non-`void` function requires
 its final return; a `void` function reaches `end` without a value.

@@ -6,13 +6,17 @@
 #include <hardware/blit.h>
 #include <hardware/custom.h>
 #include <hardware/dmabits.h>
+#include <intuition/screens.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
 #include <proto/timer.h>
 
 #include "demo/drawing_host.h"
 #include "demo/animation.h"
+#include "compiler/frontend/frontend.h"
 #include "graphics/c2p4_reference.h"
+#include "graphics/color_response_data.h"
+#include "font4x8_data.h"
 
 #define DRAW_BATCH_SIZE 16U
 extern struct Device *TimerBase; /* held by the animation owner */
@@ -39,7 +43,101 @@ struct miga80_host_drawing {
     struct miga80_animation *animation;
     enum miga80_c2p_backend backend;
     struct miga80_c2p_stats c2p;
+    struct Screen *screen;
+    const struct miga80_ast_function *ast;
+    ULONG response;
+    struct miga80_draw_text text;
+    ULONG palette[2U + 32U * 3U];
 };
+
+static ULONG expand_byte(ULONG value)
+{
+    return (value & 0xffU) * 0x01010101UL;
+}
+
+static void publish_color_response(struct miga80_host_drawing *drawing,
+                                   ULONG response)
+{
+    ULONG index;
+
+    if (drawing->screen == NULL || response >= MIGA80_RESPONSE_COUNT) {
+        return;
+    }
+    drawing->palette[0] = 32UL << 16;
+    for (index = 0U; index < 32U; ++index) {
+        const uint32_t rgb = miga80_color_response_rgb24[response][index & 15U];
+        drawing->palette[1U + index * 3U] = expand_byte(rgb >> 16);
+        drawing->palette[2U + index * 3U] = expand_byte(rgb >> 8);
+        drawing->palette[3U + index * 3U] = expand_byte(rgb);
+    }
+    drawing->palette[1U + 32U * 3U] = 0U;
+    LoadRGB32(&drawing->screen->ViewPort, drawing->palette);
+    drawing->response = response;
+}
+
+static const uint8_t *runtime_glyph(unsigned char character)
+{
+    if (character < MIGA80_FONT4X8_FIRST ||
+        character > MIGA80_FONT4X8_LAST) {
+        character = (unsigned char)'?';
+    }
+    return miga80_font4x8_ascii[character - MIGA80_FONT4X8_FIRST];
+}
+
+static void draw_runtime_text(struct miga80_host_drawing *drawing,
+                              const struct miga80_draw_text *text)
+{
+    const struct miga80_pool_entry *entry;
+    const unsigned char *bytes;
+    int32_t pen_x = text->x;
+    int32_t pen_y = text->y;
+    const int32_t origin_x = text->x;
+    unsigned int index;
+
+    if (drawing->ast == NULL || text->resource >= drawing->ast->pool.entry_count ||
+        text->color >= 16U) {
+        return;
+    }
+    entry = &drawing->ast->pool.entries[text->resource];
+    bytes = miga80_pool_entry_bytes(&drawing->ast->pool, text->resource);
+    if (entry->type != MIGA80_TYPE_STRING || bytes == NULL) {
+        return;
+    }
+    for (index = 0U; index < entry->length; ++index) {
+        const uint8_t *glyph;
+        unsigned int gy;
+
+        if (bytes[index] == (unsigned char)'\n') {
+            pen_x = origin_x;
+            pen_y += MIGA80_FONT4X8_HEIGHT;
+            continue;
+        }
+        glyph = runtime_glyph(bytes[index]);
+        for (gy = 0U; gy < MIGA80_FONT4X8_HEIGHT; ++gy) {
+            unsigned int gx;
+            for (gx = 0U; gx < MIGA80_FONT4X8_WIDTH; ++gx) {
+                const int32_t x = pen_x + (int32_t)gx;
+                const int32_t y = pen_y + (int32_t)gy;
+                const uint8_t mask = (uint8_t)(1U <<
+                    (MIGA80_FONT4X8_WIDTH - 1U - gx));
+                if ((glyph[gy] & mask) == 0U || x < 0 || y < 0 ||
+                    x >= (int32_t)MIGA80_DRAW_WIDTH ||
+                    y >= (int32_t)MIGA80_DRAW_HEIGHT) {
+                    continue;
+                }
+                if (text->layer == MIGA80_LAYER_PIXEL) {
+                    drawing->surface.pixels[(ULONG)y * MIGA80_DRAW_WIDTH +
+                                            (ULONG)x] = (UBYTE)text->color;
+                    drawing->surface.pixel_written = 1U;
+                } else {
+                    miga80_draw_planar_pset(&drawing->surface, (uint32_t)x,
+                                            (uint32_t)y, text->color);
+                }
+            }
+        }
+        pen_x += MIGA80_FONT4X8_WIDTH;
+    }
+}
 
 const char *miga80_c2p_backend_name(enum miga80_c2p_backend backend)
 {
@@ -313,6 +411,14 @@ static int service_drawing(void *data, ULONG signals)
         }
         if (!miga80_animation_request(drawing->animation)) { return 0; }
         drawing->pending = 3U;
+    } else if (drawing->pending == 4U) {
+        miga80_host_drawing_flush(drawing);
+        publish_color_response(drawing, drawing->response);
+        drawing->pending = 0U;
+    } else if (drawing->pending == 5U) {
+        miga80_host_drawing_flush(drawing);
+        draw_runtime_text(drawing, &drawing->text);
+        drawing->pending = 0U;
     }
     if (drawing->pending == 3U && miga80_animation_poll(drawing->animation)) {
         set_back_planes(drawing);
@@ -348,6 +454,33 @@ static uint32_t read_time(void *owner)
 {
     struct miga80_host_drawing *drawing = owner;
     return drawing->animation != NULL ? miga80_animation_time(drawing->animation) : 0U;
+}
+
+static void submit_owner_request(struct miga80_host_drawing *drawing,
+                                 ULONG pending)
+{
+    drawing->pending = pending;
+    if (FindTask(NULL) == drawing->owner) {
+        (void)service_drawing(drawing, 0U);
+    } else {
+        Signal(drawing->owner, 1UL << drawing->request_bit);
+        while (drawing->pending != 0U) { }
+    }
+}
+
+static void submit_color_response(void *owner, uint32_t response)
+{
+    struct miga80_host_drawing *drawing = owner;
+    if (response >= MIGA80_RESPONSE_COUNT) { return; }
+    drawing->response = response;
+    submit_owner_request(drawing, 4U);
+}
+
+static void submit_text(void *owner, const struct miga80_draw_text *text)
+{
+    struct miga80_host_drawing *drawing = owner;
+    drawing->text = *text;
+    submit_owner_request(drawing, 5U);
 }
 
 int miga80_host_drawing_animate(struct miga80_host_drawing *drawing,
@@ -386,7 +519,8 @@ ULONG miga80_host_drawing_elapsed(struct miga80_host_drawing *drawing) { return 
 
 struct miga80_host_drawing *miga80_host_drawing_create(
     uint8_t *pixels, struct miga80_drawing_context *context,
-    struct miga80_supervisor_events *events)
+    struct miga80_supervisor_events *events, struct Screen *screen,
+    const struct miga80_ast_function *ast)
 {
     struct miga80_host_drawing *drawing =
         AllocMem(sizeof(*drawing), MEMF_PUBLIC | MEMF_CLEAR);
@@ -396,6 +530,8 @@ struct miga80_host_drawing *miga80_host_drawing_create(
         return NULL;
     }
     drawing->backend = MIGA80_C2P_DEFAULT;
+    drawing->screen = screen;
+    drawing->ast = ast;
     drawing->request_bit = AllocSignal(-1);
     drawing->owner = FindTask(NULL);
     drawing->storage = AllocMem(4U * MIGA80_DRAW_PLANE_BYTES,
@@ -414,6 +550,8 @@ struct miga80_host_drawing *miga80_host_drawing_create(
     drawing->surface.clear = submit_clear;
     drawing->surface.flip = submit_flip;
     drawing->surface.time = read_time;
+    drawing->surface.color_response = submit_color_response;
+    drawing->surface.text = submit_text;
     for (plane = 0U; plane < 4U; ++plane) {
         drawing->surface.planes[plane] =
             drawing->storage + plane * MIGA80_DRAW_PLANE_BYTES;
@@ -469,6 +607,7 @@ void miga80_host_drawing_destroy(struct miga80_host_drawing *drawing)
 {
     WaitBlit();
     miga80_host_drawing_finish(drawing);
+    publish_color_response(drawing, MIGA80_RESPONSE_NEUTRAL);
     drawing->pending = 0U;
     if (drawing->request_bit >= 0) {
         (void)SetSignal(0U, 1UL << drawing->request_bit);

@@ -100,3 +100,29 @@ _miga80_runtime_tri_end:
         jsr _miga80_draw_tri_end
         lea 12(%a7),%a7
         rts
+
+        .globl _miga80_runtime_color_response
+_miga80_runtime_color_response:
+        move.l %d0,-(%a7)
+        move.l MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET(%a5),-(%a7)
+        jsr _miga80_draw_color_response
+        addq.l #8,%a7
+        rts
+
+        .globl _miga80_runtime_print_start
+_miga80_runtime_print_start:
+        move.l %d2,-(%a7)
+        move.l %d1,-(%a7)
+        move.l %d0,-(%a7)
+        move.l MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET(%a5),-(%a7)
+        jsr _miga80_draw_print_start
+        lea 16(%a7),%a7
+        rts
+
+        .globl _miga80_runtime_print_end
+_miga80_runtime_print_end:
+        move.l %d0,-(%a7)
+        move.l MIGA80_ABI_RUNTIME_DRAWING_STATE_OFFSET(%a5),-(%a7)
+        jsr _miga80_draw_print_end
+        addq.l #8,%a7
+        rts

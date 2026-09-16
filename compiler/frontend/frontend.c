@@ -1308,9 +1308,41 @@ static int require_matching_numeric(struct parser *parser, int *left,
 
 static int current_identifier_is(const struct parser *parser, const char *name);
 
+static int response_constant(const struct token *token, uint32_t *value)
+{
+    static const char *const names[MIGA80_RESPONSE_COUNT] = {
+        "RESPONSE_NEUTRAL", "RESPONSE_WARM_NEGATIVE",
+        "RESPONSE_COOL_REVERSAL", "RESPONSE_INSTANT_600",
+        "RESPONSE_MUTED_METROPOLIS", "RESPONSE_PANCHRO_MONO",
+        "RESPONSE_NTSC_1953", "RESPONSE_PAL_SECAM_625",
+        "RESPONSE_OSKM_1960", "RESPONSE_DEUTAN_2009",
+        "RESPONSE_PROTAN_2009", "RESPONSE_VIOLET_DRIVE"
+    };
+    unsigned int index;
+
+    if (token->kind != TOKEN_IDENTIFIER) {
+        return 0;
+    }
+    for (index = 0U; index < MIGA80_RESPONSE_COUNT; ++index) {
+        if (token_is_word(token, names[index])) {
+            *value = index;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int parse_primary(struct parser *parser)
 {
     const struct token token = parser->current;
+    uint32_t response;
+
+    if (response_constant(&token, &response)) {
+        parser_advance(parser);
+        return add_node(parser, MIGA80_AST_LITERAL_I32, token.line,
+                        token.column, MIGA80_INVALID_NODE,
+                        MIGA80_INVALID_NODE, response, 0U, MIGA80_TYPE_U8);
+    }
 
     if (current_identifier_is(parser, "music_position")) {
         parser_advance(parser);
@@ -1969,10 +2001,14 @@ static unsigned int parse_graphics_statement(struct parser *parser)
     const int is_tri = current_identifier_is(parser, "tri");
     const int is_cls = current_identifier_is(parser, "cls");
     const int is_flip = current_identifier_is(parser, "flip");
-    const unsigned int count = is_stop ? 0U : is_play || is_mute ? 1U : is_flip ? 0U : is_cls || is_layer ? 1U : is_tri ? 7U : is_line ? 5U : 3U;
+    const int is_response = current_identifier_is(parser, "color_response");
+    const int is_print = current_identifier_is(parser, "print");
+    const unsigned int count = is_stop ? 0U : is_play || is_mute || is_response ? 1U : is_flip ? 0U :
+        is_cls || is_layer ? 1U : is_print ? 4U : is_tri ? 7U : is_line ? 5U : 3U;
     const enum miga80_ast_statement_kind kind = is_play ? MIGA80_AST_CALL_MUSIC_PLAY :
         is_stop ? MIGA80_AST_CALL_MUSIC_STOP : is_mute ? MIGA80_AST_CALL_MUSIC_MUTE : is_flip ? MIGA80_AST_CALL_FLIP :
-        is_cls ? MIGA80_AST_CALL_CLS : is_layer
+        is_cls ? MIGA80_AST_CALL_CLS : is_response ? MIGA80_AST_CALL_COLOR_RESPONSE :
+        is_print ? MIGA80_AST_CALL_PRINT : is_layer
         ? MIGA80_AST_CALL_LAYER : is_tri ? MIGA80_AST_CALL_TRI : is_line ? MIGA80_AST_CALL_LINE
                                         : MIGA80_AST_CALL_PSET;
     unsigned int statement_index;
@@ -1984,11 +2020,12 @@ static unsigned int parse_graphics_statement(struct parser *parser)
         return MIGA80_INVALID_STATEMENT;
     }
     for (argument = 0U; argument < count; ++argument) {
-        if (is_play) {
+        if (is_play || (is_print && argument == 0U)) {
             int index;
             if (parser->current.kind != TOKEN_STRING_LITERAL) {
                 set_diagnostic(parser->diagnostic, call.line, call.column,
-                               "music_play requires a literal MOD path");
+                               "%s requires a literal string",
+                               is_play ? "music_play" : "print");
                 parser->failed = 1;
                 return MIGA80_INVALID_STATEMENT;
             }
@@ -2015,9 +2052,11 @@ static unsigned int parse_graphics_statement(struct parser *parser)
             parser_advance(parser);
         } else {
             arguments[argument] = parse_expression(parser);
-            if (!require_type(parser, &arguments[argument],
-                               argument + 1U == count ? MIGA80_TYPE_U8
-                                                       : MIGA80_TYPE_I32,
+            const enum miga80_type required =
+                is_response ? MIGA80_TYPE_U8 :
+                is_print && argument == 0U ? MIGA80_TYPE_U8 :
+                argument + 1U == count ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32;
+            if (!require_type(parser, &arguments[argument], required,
                                call.line, call.column, "drawing argument")) {
                 return MIGA80_INVALID_STATEMENT;
             }
@@ -2092,6 +2131,8 @@ static int parse_control_statement_list(struct parser *parser,
                    current_identifier_is(parser, "tri") ||
                    current_identifier_is(parser, "cls") ||
                    current_identifier_is(parser, "flip") ||
+                   current_identifier_is(parser, "color_response") ||
+                   current_identifier_is(parser, "print") ||
                    current_identifier_is(parser, "music_play") ||
                    current_identifier_is(parser, "music_stop") ||
                    current_identifier_is(parser, "music_mute")) {
@@ -2275,6 +2316,8 @@ int miga80_parse_function(const char *source, size_t source_size,
                    current_identifier_is(&parser, "tri") ||
                    current_identifier_is(&parser, "cls") ||
                    current_identifier_is(&parser, "flip") ||
+                   current_identifier_is(&parser, "color_response") ||
+                   current_identifier_is(&parser, "print") ||
                    current_identifier_is(&parser, "music_play") ||
                    current_identifier_is(&parser, "music_stop") ||
                    current_identifier_is(&parser, "music_mute")) {

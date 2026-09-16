@@ -122,7 +122,15 @@ The floating-point transforms in this generator are strictly host-side build ope
 
 Two alternatives must be benchmarked on the stock A1200. The first stores each canonical table as an independently compressed block in an external, versioned response pack. The second stores compact fixed-point descriptors—initially Q14 channels, signed Q13 matrices, and small integer curve tables—and reconstructs all 4,096 entries once when the profile is selected. The fixed-point path is accepted only if its table is byte-identical to the canonical output, has the same checksum, and is fast enough for an interactive profile change.
 
-Either route constructs one 16 KiB table of 4,096 aligned `0x00RRGGBB` values before runtime. A game-time mapping is then a single integer array lookup and the 31 active colors are cached separately. No matrix, gamma, interpolation, decompression, table generation, or floating-point work is permitted after exclusive takeover. The full comparison and hybrid fallback policy are specified in [section 11.4.2 of the main specification](../MIGA-80-specification-and-roadmap.md#1142-lut-storage-and-integer-only-runtime-contract).
+Either route constructs immutable aligned `0x00RRGGBB` data before runtime.
+Profiles referenced by a cartridge also receive precomputed projections of the
+31 active opaque palette entries, so `color_response` can switch dynamically by
+publishing a small cache. No matrix, gamma, interpolation, decompression, table
+generation, or floating-point work is permitted after exclusive takeover. The
+current implementation embeds exact projections for its fixed 16-color logical
+palette; general runtime palette editing still requires the full LUT/cache path.
+The full comparison and hybrid fallback policy are specified in [section
+11.4.2 of the main specification](../MIGA-80-specification-and-roadmap.md#1142-lut-storage-and-integer-only-runtime-contract).
 
 ## Sources
 

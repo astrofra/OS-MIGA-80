@@ -26,7 +26,7 @@ struct cfg_liveness {
     uint32_t block_def[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
     uint32_t live_in[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
     uint32_t live_out[MIGA80_MAX_BASIC_BLOCKS][MIGA80_LIVE_WORD_COUNT];
-    uint32_t phi_live_blocks[MIGA80_MAX_VALUE_INSTRUCTIONS];
+    uint64_t phi_live_blocks[MIGA80_MAX_VALUE_INSTRUCTIONS];
     unsigned char crosses_call[MIGA80_MAX_VALUE_INSTRUCTIONS];
     unsigned int last_use[MIGA80_MAX_VALUE_INSTRUCTIONS];
     unsigned char definition_block[MIGA80_MAX_VALUE_INSTRUCTIONS];
@@ -327,9 +327,13 @@ static int validate_value_function(
             const unsigned int count = miga80_value_call_arguments(value->opcode);
             if ((count > 0U && function->values[value->left].type !=
                     (value->opcode == MIGA80_VALUE_CALL_SIN || value->opcode == MIGA80_VALUE_CALL_COS
-                        ? MIGA80_TYPE_FIX : count == 1U ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32)) ||
+                        ? MIGA80_TYPE_FIX : count == 1U ||
+                          value->opcode == MIGA80_VALUE_CALL_PRINT_START
+                            ? MIGA80_TYPE_U8 : MIGA80_TYPE_I32)) ||
                 (count >= 2U && function->values[value->right].type != MIGA80_TYPE_I32) ||
-                (count == 3U && function->values[value->third].type != MIGA80_TYPE_U8)) {
+                (count == 3U && function->values[value->third].type !=
+                    (value->opcode == MIGA80_VALUE_CALL_PRINT_START
+                        ? MIGA80_TYPE_I32 : MIGA80_TYPE_U8))) {
                 return fail(diagnostic, value->line, value->column,
                             "invalid O1 drawing call");
             }
@@ -596,20 +600,20 @@ static int build_cfg_liveness(
             function->values[index].opcode == MIGA80_VALUE_PHI) {
             const unsigned int definition =
                 liveness->definition_block[index];
-            uint32_t live_blocks;
+            uint64_t live_blocks;
 
             if (definition == MIGA80_NO_DEFINITION_BLOCK) {
                 return fail(diagnostic, function->values[index].line,
                             function->values[index].column,
                             "O1 phi has no defining basic block");
             }
-            live_blocks = UINT32_C(1) << definition;
+            live_blocks = UINT64_C(1) << definition;
             for (block_index = 0U; block_index < function->block_count;
                  ++block_index) {
                 if (live_set_contains(liveness->live_in[block_index], index) ||
                     live_set_contains(liveness->live_out[block_index],
                                       index)) {
-                    live_blocks |= UINT32_C(1) << block_index;
+                    live_blocks |= UINT64_C(1) << block_index;
                 }
             }
             liveness->phi_live_blocks[index] = live_blocks;

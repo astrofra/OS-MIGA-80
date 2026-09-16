@@ -52,7 +52,7 @@ The implementation was inspected directly; older documentation sometimes describ
 | Animation | [animation.c](../src/demo/animation.c): original screen plus two allocated animation buffers; assumes depth 8 and 32 bytes per row. | Convert to two borrowed runtime buffers, with explicit ownership and completion signals. |
 | Drawing | [drawing_host.c](../src/demo/drawing_host.c): 64 KiB byte-per-pixel source supplied by the caller, 32 KiB planar storage and an 8 KiB triangle mask. | Keep runtime graphics semantics; include all these allocations in the budget. |
 
-The compiler accepts a source pointer and length, but still has independent limits: 24 locals, 80 statements and 384 AST nodes in [frontend.h](../compiler/frontend/frontend.h), and a 4 KiB generated-code buffer in `demo/main.c`. Allowing a longer document does **not** mean every longer program will compile. Incomplete or invalid source must remain editable and saveable.
+The compiler accepts a source pointer and length, but still has independent limits: 24 locals, 128 statements and 512 AST nodes in [frontend.h](../compiler/frontend/frontend.h), and a 4 KiB generated-code buffer in `demo/main.c`. Allowing a longer document does **not** mean every longer program will compile. Incomplete or invalid source must remain editable and saveable.
 
 The current runtime remains hosted by AmigaOS. Switching resolution does not implement the future exclusive runtime, and `SA_Exclusive` on an Intuition screen is not exclusive ownership of scheduling and hardware.
 

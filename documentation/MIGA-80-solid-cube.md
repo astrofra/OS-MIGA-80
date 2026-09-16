@@ -31,7 +31,7 @@ par deux triangles de même couleur, avec quatre sommets projetés par face.
 Les sources restent dans les limites de la vue actuelle : 30 lignes, au plus
 64 colonnes et moins de 4 Kio. Le compilateur accepte maintenant 24 variables
 locales ; ce sample en utilise 20, avec 262 nœuds AST et 80 statements.
-Les limites de 384 nœuds, 80 statements et 32 blocs restent inchangées.
+Les limites sont maintenant de 512 nœuds, 128 statements et 64 blocs.
 Le code natif occupe 1 884 octets, ou 1 964 avec budget, pour une borne de
 pile de 1 176 octets sur les 4 Kio réservés.
 

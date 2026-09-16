@@ -116,7 +116,7 @@ edge checks for zero before decrementing, changes only CCR on the permitted
 path, and reports fault 3 through the core handler on exhaustion. Unguarded
 O0/O1 oracle images retain their original context requirements.
 
-The optional drawing profile extends the guarded prefix to 100 bytes:
+The optional drawing profile extends the guarded prefix to 112 bytes:
 
 | Offset | Drawing profile field |
 |---:|---|
@@ -136,6 +136,9 @@ The optional drawing profile extends the guarded prefix to 100 bytes:
 | `88` | `music_position` handler: returns i32 next-row position, or -1 |
 | `92` | `music_mute` handler: D0 = u8 channel mute mask |
 | `96` | Private music-owner pointer used by trusted shims |
+| `100` | `color_response` handler: D0 = bounded u8 profile ID |
+| `104` | `print_start` handler: D0/D1/D2 = string resource/x/y |
+| `108` | `print_end` handler: D0 = u8 color |
 
 `layer(PLANAR)` and `layer(PIXEL)` are symbolic source intrinsics. A source
 `line(x0,y0,x1,y1,color)` evaluates all arguments before the two ordered calls;
@@ -143,6 +146,10 @@ the split preserves the three-scalar-register ABI. Both services have the same
 clobber contract as `pset`. Neither returns a value. The extended pset shim
 uses the surface's current layer; PIXEL remains the initial selection. Legacy
 pset-only runtime fixtures keep their original context and assembly service.
+`print("literal",x,y,color)` is similarly split into two ordered effects so its
+four source arguments fit the three-scalar-register ABI. The first effect
+captures the bounded constant-pool resource and coordinates; the second submits
+the color and draw request.
 Programs with live drawing, trig or clock calls other than pset reserve an additional 1,024 stack bytes
 for trusted C helpers. Values live across any call survive its caller-saved
 clobbers; returning calls produce a newly allocated value from D0. See

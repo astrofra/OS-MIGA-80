@@ -86,7 +86,7 @@ stops or returns to source. No physical latency/performance figure is claimed.
 IR retains one line call; value IR lowers it to two ordered effects:
 `line_start(x0,y0,color)` and `line_end(x1,y1)`. Both obey the existing maximum
 three-register native call ABI. Values needed after either call survive
-`D0-D2/A0-A1` clobbers. The optional drawing context is 80 bytes, retaining all
+`D0-D2/A0-A1` clobbers. The optional drawing context is 112 bytes, retaining all
 36 guarded-profile bytes at their existing offsets. See the
 [native ABI](MIGA-Lua-native-ABI-v0.md) for the added service entries.
 

@@ -99,7 +99,7 @@ Le contexte graphique passe de 52 à 72 octets, en conservant tous les offsets
 existants. Les cinq nouveaux services suivent le même contrat D0–D2/A0–A1 ;
 les fonctions mathématiques et l’horloge renvoient leur résultat dans D0.
 Les valeurs vivantes traversent aussi les appels sans argument. Le compilateur
-accepte désormais 80 statements et 384 nœuds AST, avec maintenant 24 variables
+accepte désormais 128 statements et 512 nœuds AST, avec maintenant 24 variables
 locales et 32 blocs de contrôle.
 
 L’encodeur direct O1 prend désormais en charge les divisions entières et fixes,
